@@ -1,0 +1,12 @@
+{
+  "separator": " · ",
+  "spaces": {
+    "acme · WEB": { "logo": "acme.svg" },
+    "acme · API": { "logo": "acme.svg" },
+    "demo-api": { "logo": "peak.svg", "bg": "#1d2b4f", "pad": 3 },
+    "lab · DASHBOARD": { "logo": "orbit.svg" },
+    "ormus": { "logo": "ormus-mark.svg", "bg": "#e0b258", "pad": 3 },
+    "docs": { "accent": "teal", "letter": "D" },
+    "web · STAGING": { "accent": "ember" }
+  }
+}

@@ -1,0 +1,51 @@
+Space tiles from examples/spaces.json (separator " · "):
+
+  acme · WEB       logo acme.svg
+  acme · API       logo acme.svg
+  demo-api         logo peak.svg on #1d2b4f, 3 px margin
+  lab · DASHBOARD  logo orbit.svg
+  ormus            logo ormus-mark.svg on #e0b258, 3 px margin
+  docs             letter D on accent teal
+  web · STAGING    letter after the separator on accent ember
+  any other space  letter after the separator, on an accent for Herdr's color
+
+Install into a copy of examples/herdr-home (a synthetic Herdr home):
+Built from Herdr's shipped mods (mods/spaces, mods/picker, mods/pane):
+  mods/ormus-spaces/  main.js (3 edits), mod.json, logos/acme.svg, logos/orbit.svg, logos/ormus-mark.svg, logos/peak.svg
+  mods/ormus-picker/  main.js (3 edits), mod.json
+  mods/ormus-pane/  main.js (10 edits), mod.json
+Copied as they are:
+  layouts/ormus.json, layouts/ormus.svg
+  themes: ormus-gold, ormus-graphite, ormus-jade, ormus-quicksilver, ormus-rust, ormus-silver, ormus-violet
+  mods/ormus-cards/  2 files
+  mods/ormus-chrome/  39 files
+  mods/ormus-needs/  3 files (tiles.js is built from your config)
+  mods/ormus-search/  2 files
+programs.json: Claude's icon set
+keys.json: picker keys open ormus-picker, Ormus keys added
+
+Next, in the app (the tool never switches it):
+  herdr-app check ~/.config/herdr-app/mods/ormus-needs   (and the other ormus-* mods)
+  herdr-app do layout.switch '{"name":"ormus"}'
+  herdr-app do app.theme '{"name":"ormus-gold"}'
+
+Undo:
+  programs.json removed (the install made it)
+  keys.json restored from its backup
+  layouts/ormus.json removed
+  layouts/ormus.svg removed
+  mods/ormus-cards removed
+  mods/ormus-chrome removed
+  mods/ormus-needs removed
+  mods/ormus-pane removed
+  mods/ormus-picker removed
+  mods/ormus-search removed
+  mods/ormus-spaces removed
+  themes/ormus-gold.json removed
+  themes/ormus-graphite.json removed
+  themes/ormus-jade.json removed
+  themes/ormus-quicksilver.json removed
+  themes/ormus-rust.json removed
+  themes/ormus-silver.json removed
+  themes/ormus-violet.json removed
+The demo home is back as it was: yes
