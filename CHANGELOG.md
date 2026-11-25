@@ -13,7 +13,15 @@ Newest first.
 - The mods load their icons from the copies in `mods/ormus-chrome/`.
 - Licenses: Lucide (ISC) and Feather (MIT) texts, Herdr attribution headers, the Inter
   notice as the font carries it.
-- `check.sh` also decodes escapes and runs the deny-list on the result.
+- `check.sh` also runs `scripts/decoded_scrub.py`: it decodes every known escape form, repeated up to
+  50 levels, and matches the deny-list on the result (it does not cover string concatenation,
+  lookalike letters, zero-width characters or base64-style encodings).
+- Settings and manifest files with a non-finite number (`Infinity`, `NaN`, `1e400`) are refused
+  with a message, and the full 8-byte PNG signature is required for a PNG logo.
+- Symlinked `mods/`, `layouts/` and `themes/` folders and symlinked settings files work (writes go
+  through the link and keep the file mode); a link that points outside the home is refused.
+- A damaged or wrong-shape `.ormus-look.json` stops `install` and `undo` with a plain message that
+  names the file; the manifest is written in one step.
 - `undo` refuses a manifest path that is not one of the look's own files.
 
 ## 0.1.0

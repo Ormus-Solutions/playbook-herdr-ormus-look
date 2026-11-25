@@ -42,7 +42,7 @@ Inter and Cormorant Garamond are included (SIL Open Font License 1.1, notices ne
 
 ### Which systems it works on
 
-- **Linux: this is what is verified.** On Linux the installer, the 30 tests and the demo pass (measured on Linux x86_64). I also built the three patched mods from Herdr 0.1.15's own `spaces`, `picker` and `pane` mods and every installed mod parses as JavaScript (measured with `node --check`). I could not start `herdr-app` on the machine where this was packaged, so `herdr-app check` and the window itself were not run there; PLAYBOOK.md has you run `herdr-app check` on each mod before you switch.
+- **Linux: this is what is verified.** On Linux the installer, the test suite and the demo pass (measured on Linux x86_64). I also built the three patched mods from Herdr 0.1.15's own `spaces`, `picker` and `pane` mods and every installed mod parses as JavaScript (measured with `node --check`). I could not start `herdr-app` on the machine where this was packaged, so `herdr-app check` and the window itself were not run there; PLAYBOOK.md has you run `herdr-app check` on each mod before you switch.
 - **macOS: expected to work, untested.** The chrome mod has a macOS branch (traffic lights) and the installer is plain Python with no system calls. I do not know where the desktop app keeps its home on macOS, so I did not hard-code a guess: pass `--home` or set `HERDR_APP_HOME`. The keys are `ctrl-shift-...`; Herdr uses `cmd-p` for its own picker on macOS.
 - **Windows: not tested, not claimed.**
 - The terminal app `herdr` has no mods: it cannot show any of this.
