@@ -3,7 +3,10 @@ Copyright (c) 2026 Ormus (Ormus Solutions). MIT license (LICENSE).
 
 This repo contains work derived from the Herdr desktop app (herdr-app 0.1.15,
 https://herdr.dev), which is licensed under the Apache License, Version 2.0.
-The full text is in LICENSE-APACHE-2.0.txt. The derived parts keep that
+The full text is in LICENSE-APACHE-2.0.txt. Herdr's own license file (its
+herdr-app repository, `LICENSE`, and `license = "Apache-2.0"` in its
+Cargo.toml) carries no copyright line that names a holder, so none is named
+here: the work is Herdr's, https://herdr.dev. The derived parts keep that
 license; the Apache License also applies to the changes made to them here.
 
 What is derived, and Changes made to it
@@ -26,16 +29,22 @@ What is derived, and Changes made to it
 4. themes/*.json follow the theme format of Herdr and carry its color names;
    the colors are the Ormus palette.
 5. The icons in mods/ormus-chrome/*.svg (except ormus-mark.svg) are Lucide
-   icons (https://lucide.dev, ISC license, Copyright (c) Lucide Contributors
-   and, for the Feather parts, Copyright (c) 2013-2022 Cole Bemis), the set
-   Herdr's own mod folders use. The Ormus mark is the Ormus brand's.
+   icons (https://lucide.dev, ISC license; parts from Feather, MIT license,
+   Copyright (c) 2013-2022 Cole Bemis). Both license texts are in
+   LICENSE-LUCIDE.txt.
+6. The Ormus mark (mods/ormus-chrome/ormus-mark.svg, examples/logos/
+   ormus-mark.svg) and the wordmark are the Ormus brand's. The MIT license of
+   this repo does not give the right to use them as another brand.
+
+Each modified file that can carry a comment says so at its top: mods/ormus-chrome/main.js,
+and the three mods the install builds (a header line is added to each).
 
 Everything else (mods/ormus-needs, mods/ormus-search, mods/ormus-cards, the
 install tool) is written for this repo and uses only the mod API of Herdr.
 Its Needs you view and Overview borrow ideas from Flockbook
 (https://github.com/minchenlee/flockbook, MIT license); the code is new.
 
-Fonts: Inter and Cormorant Garamond are under the SIL Open Font License 1.1.
+Fonts: Inter (Copyright 2016 The Inter Project Authors, the line in the font's own name table) and Cormorant Garamond (Copyright 2015 The Cormorant Project Authors) are under the SIL Open Font License 1.1.
 Their notices are next to the font files (mods/ormus-chrome/fonts/*-OFL.txt)
 and must stay with them. JetBrains Mono, which the layout names, is not
 included.

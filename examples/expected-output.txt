@@ -30,8 +30,8 @@ Next, in the app (the tool never switches it):
   herdr-app do app.theme '{"name":"ormus-gold"}'
 
 Undo:
-  programs.json removed (the install made it)
-  keys.json restored from its backup
+  programs.json removed (the install made it, nothing else is in it)
+  keys.json: the keys install changed or added were put back; your other keys stay
   layouts/ormus.json removed
   layouts/ormus.svg removed
   mods/ormus-cards removed

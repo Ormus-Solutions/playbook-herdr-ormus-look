@@ -36,7 +36,7 @@ People who run several agents in the Herdr desktop app and want to see their sta
 | A Herdr home with Herdr's own mods | written by the desktop app on every start | `ls ~/.config/herdr-app/mods/spaces/main.js` |
 | herdr-core `hc` | the one that comes with the app; Needs you and Search read terminals with `hc read` | `command -v hc` |
 | JetBrains Mono (font) | any; the layout names it for terminals, and it is not included | Linux: `fc-list \| grep -i "JetBrains Mono"` |
-| node (optional) | any recent version, for four of the tests | `node --version` |
+| node (optional) | any recent version, for three of the tests | `node --version` |
 
 Inter and Cormorant Garamond are included (SIL Open Font License 1.1, notices next to the files).
 
@@ -116,8 +116,8 @@ Next, in the app (the tool never switches it):
   herdr-app do app.theme '{"name":"ormus-gold"}'
 
 Undo:
-  programs.json removed (the install made it)
-  keys.json restored from its backup
+  programs.json removed (the install made it, nothing else is in it)
+  keys.json: the keys install changed or added were put back; your other keys stay
   layouts/ormus.json removed
   layouts/ormus.svg removed
   mods/ormus-cards removed
@@ -141,10 +141,24 @@ The demo home is back as it was: yes
 
 - Logos go by the exact space name. Rename a space and it loses its logo until `spaces.json` has the new name and you run `install` again.
 - The patched mods are copies and do not follow Herdr updates. Run `install` again after an update. If Herdr moved the code an edit looks for, `install` stops and writes nothing; PLAYBOOK.md says how to move the anchor.
-- `install` edits `keys.json`: Herdr's picker keys open the Ormus picker, and four Ormus keys are added where you have not bound them (it prints each one it left out). From then on Herdr treats the file as yours and stops adding its new default keys on upgrades. `--no-keys` skips all of it.
-- `undo` takes out only its own edits. A file you changed after install (a key you added) keeps its changes and the copy from before install stays next to it as `<file>.bak-pre-ormus`.
-- One word of Herdr's interface API, the one for the pointer-over state, is written with a `\u0065` escape for its last-but-one letter in this repo's JavaScript and theme files. It is the same word to Herdr: the installer writes it plainly. The escape is only there so this repo's own scrub of client names does not flag a common word.
+- `install` edits `keys.json` (and sets Claude's icon in `programs.json`): Herdr's picker keys open the Ormus picker, and four Ormus keys are added where you have not bound them (it prints each one it left out). From then on Herdr treats the file as yours and stops adding its new default keys on upgrades. With `--no-keys`, or when you have no `keys.json`, nothing is bound and `install` prints the lines to add by hand (the table below).
+- `undo` reverses only what `install` recorded: the keys it rebound or added and the program fields it set, each only while it still reads as install left it. Everything else you wrote in those two files stays, also what you added between two installs. A copy of each file from before the first install stays as `<file>.bak-pre-ormus` (removed again if the file reads the same as the copy after undo); `undo` never restores a whole file from it.
+- Installing again replaces the seven `ormus-*` mod folders, the layout and the themes with fresh copies: keep your own edits to them elsewhere. It stops, writing nothing, when one of those names exists and this tool did not make it.
+- Some words in the repo's JavaScript and theme files are spelled with a `\u` escape (a backslash, `u` and four hex digits). It is the same word to Herdr, and the installer writes it plainly. `check.sh` decodes such escapes and runs its checks on the result.
 - Needs you types into an agent only when you press a button, and only after it read the screen again and found the same question. Read `mods/ormus-needs/main.js` before you trust any tool that types for you.
+
+## Keys
+
+`install` binds these where you have not bound the key. Add them by hand to `keys.json` when you use `--no-keys` or have no `keys.json`:
+
+| Section | Key | Action |
+|---|---|---|
+| `global` | `ctrl-shift-s` | `mod.open:ormus-search` (Search all terminals) |
+| `layout:ormus` | `ctrl-shift-i` | `ormus-needs.needs` (Needs you) |
+| `layout:ormus` | `ctrl-shift-g` | `ormus-needs.overview` (Overview) |
+| `layout:ormus` | `ctrl-shift-j` | `ormus-needs.sidebar` (Lists or Flock) |
+
+Also replace `mod.open:picker` with `mod.open:ormus-picker` on any key that opens Herdr's picker, so the Go to picker shows your tiles.
 
 ## Files
 
@@ -165,14 +179,15 @@ The demo home is back as it was: yes
 | `tests/` | offline tests that pin the behaviour on the synthetic data |
 | `check.sh` | the one gate: tests, placeholders, scrub. The scrub's client-name check reads your own deny-list (`$PLAYBOOK_DENYLIST`, default `~/.config/playbooks/denylist.txt`); without one it says "deny-list: 0 entries" and skips that check |
 | `scripts/scrub.sh` | the scrub check, copied unchanged from playbook-packaging |
-| `NOTICE`, `LICENSE-APACHE-2.0.txt` | what is derived from Herdr, what was changed, and Herdr's license |
+| `scripts/decoded_scrub.py` | the scrub on decoded text, run by `check.sh` |
+| `NOTICE`, `LICENSE-APACHE-2.0.txt`, `LICENSE-LUCIDE.txt` | what is derived from Herdr, what was changed, Herdr's license, and the icon licenses |
 | `CHANGELOG.md` | what changed, newest first |
 
 ## Credits
 
-Made by Ormus (Ormus Solutions). The look is the Ormus brand: the midnight and gold colors, Inter, Cormorant Garamond, JetBrains Mono and the Ormus mark are public at brand.ormus.solutions. MIT license for this repo's own code (`LICENSE`).
+Made by Ormus (Ormus Solutions). The look is the Ormus brand: the midnight and gold colors, Inter, Cormorant Garamond, JetBrains Mono and the Ormus mark are public at brand.ormus.solutions. MIT license for this repo's own code (`LICENSE`). The MIT license does not cover the Ormus mark and wordmark as another brand: you may use them in this look, but not as your own brand.
 
-It builds on [Herdr](https://herdr.dev), which is open source under the Apache License 2.0. `layouts/ormus.json` and `mods/ormus-chrome/main.js` are clones of Herdr 0.1.15's `main` layout and `workspace-chrome` mod with changes, and the patched mods are built from the few lines of Herdr's code copied here as anchors. `NOTICE` lists each derived file and what was changed, as the Apache License asks. Needs you and Overview borrow ideas from [Flockbook](https://github.com/minchenlee/flockbook) (MIT); the code is new. The icons are [Lucide](https://lucide.dev) (ISC). Inter and Cormorant Garamond are under the SIL Open Font License 1.1.
+It builds on [Herdr](https://herdr.dev), which is open source under the Apache License 2.0. `layouts/ormus.json` and `mods/ormus-chrome/main.js` are clones of Herdr 0.1.15's `main` layout and `workspace-chrome` mod with changes, and the patched mods are built from the few lines of Herdr's code copied here as anchors. `NOTICE` lists each derived file and what was changed, as the Apache License asks. Needs you and Overview borrow ideas from [Flockbook](https://github.com/minchenlee/flockbook) (MIT); the code is new. The icons are [Lucide](https://lucide.dev) (ISC, with parts from Feather, MIT; texts in `LICENSE-LUCIDE.txt`). Inter and Cormorant Garamond are under the SIL Open Font License 1.1.
 
 Packaged with
 [playbook-packaging](https://github.com/Ormus-Solutions/playbook-packaging),

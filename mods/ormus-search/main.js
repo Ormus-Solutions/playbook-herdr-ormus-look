@@ -350,7 +350,7 @@ export default class SearchTerminals extends View {
         .child(div().id("search-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer()
           .hov\u0065r((s) => s.bg(t.hov\u0065r).text_color(t.foreground)).on_click(() => this.leave()).child("Esc")))
       .child(h_flex().h(36).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
-        .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
+        .child(svg("mods/ormus-chrome/search.svg").size(15).text_color(t.dim))
         .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground)))
       .child(h_flex().gap(8).text_size(11.5).text_color(t.dim)
         .child(div().flex_1().child(found))

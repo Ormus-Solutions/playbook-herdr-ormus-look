@@ -21,6 +21,12 @@
 // while its tab is shown.
 // An answer typed but not sent (another card was moved into the big pane before Enter) is marked "Not sent" on
 // its card until its agent starts a turn or writes its card again. A second choice on that card moves it but types nothing more.
+//
+// Words used below, in plain words:
+//   lane       one terminal that owns one part of the work, usually one agent in one pane of the tab.
+//   big pane   the large pane in the middle of the tab (the "middle pane"): it shows one terminal at full size,
+//              and the board's cards sit beside it. "Moves a lane into the big pane" means: swap that terminal in.
+//   spot       the command that does that swap (the prop `spot`); `source` is the command that prints the cards.
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
@@ -431,7 +437,7 @@ export default class Cards extends View {
   }
 
   state(t, st) {
-    if (st === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
+    if (st === "working") return svg("mods/ormus-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
     if (st === "blocked") {
       return div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5)
         .font_semibold().text_color(t.blocked).child("Needs you");

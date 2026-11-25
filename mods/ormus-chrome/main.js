@@ -1,3 +1,6 @@
+// Modified from Herdr's `workspace-chrome` mod (herdr-app 0.1.15, Apache License 2.0,
+// https://herdr.dev). Changed by playbook-herdr-ormus-look: the Ormus mark and wordmark in the
+// header, the search button opens the Ormus picker, the footer rows. See NOTICE.
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";

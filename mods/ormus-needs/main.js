@@ -153,8 +153,8 @@ function overviewSections(items, by) {
 // `n` lines.
 function screenTail(text, n) {
   const clean = String(text ?? "")
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\r/g, "");
   const lines = clean.split("\n").map((l) => l.replace(/\s+$/, ""));
   while (lines.length && !lines[lines.length - 1]) lines.pop();
@@ -721,8 +721,8 @@ export default class Needs extends View {
 
   // A status mark: a spinner while working, a red dot when it waits, a gold check when done, a ring when idle.
   mark(t, status) {
-    if (status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
-    if (status === "done") return svg("mods/workspace-chrome/check.svg").size(13).flex_none().text_color(t.done);
+    if (status === "working") return svg("mods/ormus-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
+    if (status === "done") return svg("mods/ormus-chrome/check.svg").size(13).flex_none().text_color(t.done);
     if (status === "blocked") return div().size(9).flex_none().rounded(5).bg(t.blocked);
     return div().size(10).flex_none().rounded(5).border(1).border_color(t.dim);
   }
