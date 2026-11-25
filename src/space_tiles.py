@@ -16,6 +16,7 @@ tile draws them at 18 px on an optional background color.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 TILE_ON_ACCENT = "#0e1830"  # the text color on an accent tile: the brand's deep midnight
 # The brand's identity accents. A space color of Herdr's (an ANSI name) is moved to one of these.
@@ -133,6 +134,16 @@ def tile_js(table: dict[str, dict], separator: str) -> str:
     )
 
 
+_EDITS = [0]  # how many anchored edits have been made so far, for the install report
+
+
+def counted(patch: Callable[[str], str], src: str) -> tuple[str, int]:
+    """Run a patch function and say how many edits it made."""
+    before = _EDITS[0]
+    out = patch(src)
+    return out, _EDITS[0] - before
+
+
 def edit(text: str, old: str, new: str, what: str) -> str:
     """Replace `old` by `new`, which must appear exactly once, else stop and say what moved."""
     if text.count(old) != 1:
@@ -141,6 +152,7 @@ def edit(text: str, old: str, new: str, what: str) -> str:
             "Nothing was written. Update the anchor in src/space_tiles.py or src/pane_head.py "
             "(PLAYBOOK.md, 'When Herdr moves the code')."
         )
+    _EDITS[0] += 1
     return text.replace(old, new)
 
 

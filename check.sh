@@ -5,6 +5,8 @@
 #   2. placeholders from the template that are not filled yet
 #   3. the scrub: secrets, e-mails, phones, IPs, host names, home paths and
 #      your deny-list (see scripts/scrub.sh), plus gitleaks when installed
+#   4. the decoded scrub (scripts/decoded_scrub.py): the same deny-list on the text
+#      with escapes decoded, and no other way to spell letters
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,5 +29,10 @@ echo "none left"
 
 echo "== scrub"
 bash scripts/scrub.sh .
+
+echo "== decoded scrub"
+# The scrub above reads typed characters. This reads what a program would: it decodes
+# escapes, runs the deny-list again, and refuses other ways to spell letters.
+python3 scripts/decoded_scrub.py .
 
 echo "check: ok"

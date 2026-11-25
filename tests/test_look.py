@@ -125,14 +125,16 @@ class InstallTest(TempHome):
         ol.undo(self.home)
         self.assertEqual(ol.tree_state(self.home), before)
 
-    def test_undo_keeps_a_file_you_changed_after_install(self) -> None:
+    def test_undo_keeps_a_key_you_added_after_install(self) -> None:
         self.install()
         keys = json.loads((self.home / "keys.json").read_text())
         keys["global"]["ctrl-shift-y"] = "tab.new"
         (self.home / "keys.json").write_text(json.dumps(keys))
-        lines = ol.undo(self.home)
-        self.assertTrue(any("keys.json changed after install: kept" in line for line in lines))
-        self.assertIn("ctrl-shift-y", json.loads((self.home / "keys.json").read_text())["global"])
+        ol.undo(self.home)
+        after = json.loads((self.home / "keys.json").read_text())
+        self.assertEqual(after["global"]["ctrl-shift-y"], "tab.new")
+        self.assertEqual(after["global"]["ctrl-shift-k"], "mod.open:picker")  # our rebind is reversed
+        self.assertNotIn("ctrl-shift-s", after["global"])
         self.assertFalse((self.home / "mods/ormus-chrome").exists())
 
     def test_a_folder_that_is_not_ours_stops_the_install(self) -> None:
@@ -278,6 +280,294 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(shipped, [])
         svgs = sorted(p.name for p in (EXAMPLES / "logos").iterdir())
         self.assertEqual(svgs, ["acme.svg", "orbit.svg", "ormus-mark.svg", "peak.svg"])
+
+
+class SettingsSafetyTest(TempHome):
+    """H1: undo reverses only what install changed. H2: a bad file stops before any write."""
+
+    def read(self, name: str) -> dict:
+        return json.loads((self.home / name).read_text())
+
+    def write(self, name: str, data: object) -> None:
+        (self.home / name).write_text(json.dumps(data))
+
+    def test_keys_edit_survives_install_again_and_undo(self) -> None:
+        self.install()
+        keys = self.read("keys.json")
+        keys["global"]["ctrl-shift-y"] = "tab.new"
+        self.write("keys.json", keys)
+        self.install()
+        ol.undo(self.home)
+        after = self.read("keys.json")
+        self.assertEqual(after["global"]["ctrl-shift-y"], "tab.new")
+        self.assertEqual(after["global"]["ctrl-shift-k"], "mod.open:picker")
+        self.assertEqual(after["global"]["ctrl-space a"]["args"]["name"], "picker")
+        self.assertNotIn("layout:ormus", after)
+
+    def test_programs_edit_survives_install_again_and_undo(self) -> None:
+        self.write("programs.json", {"programs": {"claude": {"name": "Mine"}, "other": {"icon": "x.svg"}}})
+        self.install()
+        programs = self.read("programs.json")
+        programs["programs"]["extra"] = {"icon": "y.svg"}
+        programs["programs"]["claude"]["note"] = "later"
+        self.write("programs.json", programs)
+        self.install()
+        ol.undo(self.home)
+        after = self.read("programs.json")["programs"]
+        self.assertEqual(after["claude"], {"name": "Mine", "note": "later"})
+        self.assertEqual(after["other"], {"icon": "x.svg"})
+        self.assertEqual(after["extra"], {"icon": "y.svg"})
+
+    def test_a_programs_file_the_install_made_stays_when_you_added_to_it(self) -> None:
+        self.install()
+        programs = self.read("programs.json")
+        programs["programs"]["extra"] = {"icon": "y.svg"}
+        self.write("programs.json", programs)
+        self.install()
+        ol.undo(self.home)
+        self.assertEqual(self.read("programs.json"), {"programs": {"extra": {"icon": "y.svg"}}})
+
+    def test_a_value_you_changed_is_not_put_back_over(self) -> None:
+        self.install()
+        keys = self.read("keys.json")
+        keys["global"]["ctrl-shift-k"] = "my.own.action"
+        self.write("keys.json", keys)
+        lines = ol.undo(self.home)
+        self.assertEqual(self.read("keys.json")["global"]["ctrl-shift-k"], "my.own.action")
+        self.assertTrue(any("ctrl-shift-k" in line and "kept" in line for line in lines))
+
+    def test_a_typo_in_keys_json_stops_before_any_write(self) -> None:
+        (self.home / "keys.json").write_text('{"global": {')
+        before = ol.tree_state(self.home)
+        with self.assertRaises(SystemExit) as raised:
+            self.install()
+        self.assertIn("keys.json is not valid JSON", str(raised.exception))
+        self.assertEqual(ol.tree_state(self.home), before)
+        self.assertFalse((self.home / ".ormus-look.json").exists())
+
+    def test_programs_json_that_is_a_list_stops_with_a_message(self) -> None:
+        self.write("programs.json", [1, 2])
+        before = ol.tree_state(self.home)
+        with self.assertRaises(SystemExit) as raised:
+            self.install()
+        self.assertIn("programs.json must hold a JSON object", str(raised.exception))
+        self.assertEqual(ol.tree_state(self.home), before)
+
+    def test_a_wrong_shape_inside_programs_json_stops_too(self) -> None:
+        self.write("programs.json", {"programs": {"claude": "x"}})
+        with self.assertRaises(SystemExit) as raised:
+            self.install()
+        self.assertIn("'claude' must be an object", str(raised.exception))
+
+    def test_keys_json_that_is_a_list_stops(self) -> None:
+        self.write("keys.json", [])
+        with self.assertRaises(SystemExit) as raised:
+            self.install()
+        self.assertIn("keys.json must hold a JSON object", str(raised.exception))
+
+    def test_check_finds_the_same_bad_files(self) -> None:
+        (self.home / "keys.json").write_text("{")
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "src/ormus_look.py"), "check", "--home", str(self.home),
+             "--config", str(EXAMPLES / "spaces.json")], capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("keys.json is not valid JSON", done.stderr)
+
+    def test_a_failure_mid_install_leaves_undo_and_install_working(self) -> None:
+        before = ol.tree_state(self.home)
+        real = ol.write_json
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        ol.write_json = boom  # type: ignore[assignment]
+        try:
+            with self.assertRaises(SystemExit) as raised:
+                self.install()
+        finally:
+            ol.write_json = real  # type: ignore[assignment]
+        self.assertIn("undo", str(raised.exception))
+        self.assertTrue((self.home / ".ormus-look.json").is_file())
+        self.install()  # a second install is not blocked
+        ol.undo(self.home)
+        self.assertEqual(ol.tree_state(self.home), before)
+
+    def test_a_failure_then_undo_alone_cleans_up(self) -> None:
+        before = ol.tree_state(self.home)
+        real = ol.write_json
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        ol.write_json = boom  # type: ignore[assignment]
+        try:
+            with self.assertRaises(SystemExit):
+                self.install()
+        finally:
+            ol.write_json = real  # type: ignore[assignment]
+        ol.undo(self.home)
+        self.assertEqual(ol.tree_state(self.home), before)
+
+    def test_undo_refuses_a_manifest_path_that_is_not_ours(self) -> None:
+        self.install()
+        manifest = json.loads((self.home / ol.MANIFEST).read_text())
+        for bad in ("../outside", "/etc/passwd", "mods/spaces", "mods/ormus-x/y", "keys.json", "layouts/other.json"):
+            with self.subTest(path=bad):
+                (self.home / ol.MANIFEST).write_text(json.dumps({**manifest, "paths": [bad, *manifest["paths"]]}))
+                with self.assertRaises(SystemExit):
+                    ol.undo(self.home)
+                self.assertTrue((self.home / "mods/ormus-chrome").is_dir())  # nothing was removed
+
+    def test_without_keys_json_or_with_no_keys_the_bindings_are_printed(self) -> None:
+        for make_file, keys in ((False, True), (True, False)):
+            with self.subTest(file=make_file, keys=keys):
+                home = self.tmp / f"home-{make_file}"
+                shutil.copytree(EXAMPLES / "herdr-home", home)
+                if not make_file:
+                    (home / "keys.json").unlink()
+                text = "\n".join(ol.install(self.config, home, keys))
+                for word in ("ctrl-shift-s", "mod.open:ormus-search", "ctrl-shift-i", "ormus-needs.needs",
+                             "ctrl-shift-g", "ormus-needs.overview", "ctrl-shift-j", "ormus-needs.sidebar",
+                             "mod.open:ormus-picker"):
+                    self.assertIn(word, text)
+
+    def test_the_report_counts_the_real_edits(self) -> None:
+        text = "\n".join(self.install())
+        self.assertIn("mods/ormus-spaces/  main.js (3 edits)", text)
+        self.assertIn("mods/ormus-picker/  main.js (3 edits)", text)
+        self.assertIn("mods/ormus-pane/  main.js (10 edits)", text)
+        src = (self.home / "mods/spaces/main.js").read_text()
+        _, n = st.counted(lambda x: st.patch_spaces(x, "// shared\n"), src)
+        self.assertEqual(n, 3)
+
+    def test_generated_mods_carry_the_herdr_notice(self) -> None:
+        self.install()
+        for mod in ("ormus-spaces", "ormus-picker", "ormus-pane"):
+            self.assertIn("Apache License 2.0", (self.home / "mods" / mod / "main.js").read_text().split("\n")[0])
+        self.assertIn("Apache License 2.0", (ROOT / "mods/ormus-chrome/main.js").read_text().split("\n")[0])
+
+
+class RepoContentTest(unittest.TestCase):
+    def test_every_asset_a_mod_names_is_in_the_repo(self) -> None:
+        ref = re.compile(r"""["'`](mods/([a-z0-9-]+)/([A-Za-z0-9_./-]+\.(?:svg|png|js|json|ttf)))["'`]""")
+        sources = [*ROOT.glob("mods/*/*.js"), ROOT / "layouts/ormus.json", ROOT / "mods/ormus-chrome/programs.ormus.json"]
+        seen = 0
+        for file in sources:
+            for m in ref.finditer(file.read_text()):
+                seen += 1
+                self.assertTrue(m.group(2).startswith("ormus-"), f"{file.name} loads {m.group(1)} from a Herdr folder")
+                generated = m.group(1).startswith("mods/ormus-spaces/logos/")
+                self.assertTrue(generated or (ROOT / m.group(1)).is_file(), f"{file.name}: {m.group(1)} is missing")
+        self.assertGreater(seen, 3)
+        icons = ROOT / "mods/ormus-chrome"
+        for name in ("settings", "plus", "search", "sidebar", "spinner", "check"):
+            self.assertTrue((icons / f"{name}.svg").is_file(), name)
+
+    def test_the_licenses_are_shipped(self) -> None:
+        lucide = (ROOT / "LICENSE-LUCIDE.txt").read_text()
+        self.assertIn("ISC License", lucide)
+        self.assertIn("The MIT License", lucide)
+        self.assertIn("Cole Bemis", lucide)
+        notice = (ROOT / "NOTICE").read_text()
+        self.assertIn("no copyright line", notice)
+        self.assertIn("not give the right to use them as another brand", notice)
+        inter = (ROOT / "mods/ormus-chrome/fonts/Inter-OFL.txt").read_text().splitlines()[0]
+        self.assertEqual(inter, "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)")
+
+    def test_the_themes_are_valid_and_share_the_terminal_hues(self) -> None:
+        fusion = ["#0b1226", "#d44f4f", "#8fb08a", "#d29e3d", "#6f93cf", "#a98bc2", "#6fa7a8", "#a5b0c4",
+                  "#6d7891", "#e27a72", "#aecba7", "#e0b258", "#93b2e2", "#c4a9da", "#93c6c4", "#eceae3"]
+        themes = sorted((ROOT / "themes").glob("ormus-*.json"))
+        self.assertEqual([t.stem for t in themes], [
+            "ormus-gold", "ormus-graphite", "ormus-jade", "ormus-quicksilver", "ormus-rust", "ormus-silver", "ormus-violet"])
+        for file in themes:
+            data = json.loads(file.read_text())
+            hues = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14]  # the neutrals (0, 7, 8, 15) follow the theme
+            self.assertEqual([data["ansi"][i] for i in hues], [fusion[i] for i in hues], file.name)
+            colors = data["colors"]
+            self.assertEqual(colors["blocked"], "#e27a72", file.name)
+            for key in ("surface", "canvas", "chrome", "foreground", "working", "done", "idle", POINTER):
+                self.assertRegex(colors.get(key, ""), r"^#[0-9a-f]{6,8}$", f"{file.name} {key}")
+        self.assertEqual(
+            st.ACCENTS,
+            {"rose": "#e0849a", "teal": "#4fbcae", "leaf": "#86c272", "ember": "#e8955f", "sky": "#78a6ee", "iris": "#ad92e6"},
+        )
+        self.assertEqual(set(st.MARK_TO_ACCENT.values()), set(st.ACCENTS))
+
+    def test_the_layout_names_mods_and_a_theme_that_exist(self) -> None:
+        layout = json.loads((ROOT / "layouts/ormus.json").read_text())
+        names: set[str] = set()
+
+        def walk(node: object) -> None:
+            if isinstance(node, dict):
+                content = node.get("content")
+                if isinstance(content, dict) and "mod" in content:
+                    names.add(content["mod"])
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v)
+
+        walk(layout)
+        ours = {n for n in names if n.startswith("ormus-")}
+        built = set(ol.PATCHED.values())
+        for name in ours:
+            self.assertTrue(name in built or (ROOT / "mods" / name / "main.js").is_file(), name)
+        self.assertEqual(names - ours, {"agents", "changes", "files", "tabs", "workspace-status"})  # Herdr's own
+        self.assertTrue((ROOT / "themes" / f"{layout['theme']}.json").is_file())
+        self.assertEqual(layout["theme"], ol.DEFAULT_THEME)
+        self.assertTrue((ROOT / layout["preview"]).is_file())
+
+    def test_a_key_bound_in_global_blocks_a_layout_key(self) -> None:
+        keys = {"global": {"ctrl-shift-i": "my.action"}}
+        out, left = merge_home.add_keys(keys)
+        self.assertTrue(any("ctrl-shift-i (yours in global" in x for x in left))
+        self.assertNotIn("ctrl-shift-i", out.get("layout:ormus", {}))
+        self.assertIn("ctrl-shift-g", out["layout:ormus"])
+
+
+class DecodedScrubTest(unittest.TestCase):
+    """M4: an escaped word is caught after decoding; only the one shielded word passes."""
+
+    def run_scrub(self, text: str, deny: str = "zebra\n") -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "repo"
+            folder.mkdir()
+            (folder / "x.js").write_text(text)
+            (Path(tmp) / "deny.txt").write_text(deny)
+            env = {"PATH": "/usr/bin:/bin", "PLAYBOOK_DENYLIST": str(Path(tmp) / "deny.txt")}
+            return subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(folder)],
+                                  capture_output=True, text=True, env=env)
+
+    def test_an_escaped_deny_listed_word_is_caught(self) -> None:
+        done = self.run_scrub("const a = 'ze" + "\\" + "u0062ra';\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("deny-list entry 1", done.stdout)
+        self.assertNotIn("zebra", done.stdout)
+
+    def test_a_braced_escape_is_caught_too(self) -> None:
+        self.assertEqual(self.run_scrub("x = 'ze" + "\\" + "u{62}ra'\n").returncode, 1)
+
+    def test_other_ways_to_spell_letters_are_refused(self) -> None:
+        for text in ("'" + "\\" + "x7a" + "ebra'", "String.from" + "CharCode(122)", "chr" + "(122)", "&" + "#122;ebra"):
+            with self.subTest(text=text):
+                self.assertEqual(self.run_scrub(text + "\n").returncode, 1)
+
+    def test_the_shielded_word_alone_passes(self) -> None:
+        shielded = "hov" + "\\" + "u0065r"
+        done = self.run_scrub(f"el.{shielded}(1);\n", deny=POINTER + "\n")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_shielded_word_next_to_another_escaped_word_is_still_caught(self) -> None:
+        shielded = "hov" + "\\" + "u0065r"
+        done = self.run_scrub(f"{shielded} ze" + "\\" + "u0062ra\n", deny=POINTER + "\nzebra\n")
+        self.assertEqual(done.returncode, 1)
+
+    def test_the_repo_itself_passes(self) -> None:
+        done = subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(ROOT)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout)
 
 
 @unittest.skipUnless(NODE, "node is not installed")

@@ -131,3 +131,106 @@ def write(path: Path, before: dict, after: dict) -> bool:
     tmp.write_text(json.dumps(after, indent=2, ensure_ascii=False) + "\n")
     tmp.replace(path)  # Herdr reloads both files live
     return True
+
+
+# ---- what a change was, and how to take back only that ---------------------------------
+# The install records each value it set or rebound (before and after). Undo puts a value
+# back only while it still reads as the install left it, and never replaces a whole file.
+
+
+class BadFile(ValueError):
+    """A settings file that is not the shape Herdr reads: the message says what to fix."""
+
+
+def check_programs(mine: object, ormus: dict) -> dict:
+    if not isinstance(mine, dict):
+        raise BadFile("programs.json must hold a JSON object")
+    programs = mine.get("programs", {})
+    if not isinstance(programs, dict):
+        raise BadFile("programs.json: 'programs' must be an object")
+    for key in ormus.get("programs", {}):
+        if key in programs and not isinstance(programs[key], dict):
+            raise BadFile(f"programs.json: the entry '{key}' must be an object")
+    return mine
+
+
+def check_keys(keys: object) -> dict:
+    if not isinstance(keys, dict):
+        raise BadFile("keys.json must hold a JSON object")
+    return keys
+
+
+def program_changes(mine: dict, after: dict) -> list[dict]:
+    out = []
+    for prog, fields in after.get("programs", {}).items():
+        was = mine.get("programs", {}).get(prog)
+        for field, value in fields.items():
+            if was is None or field not in was or was[field] != value:
+                out.append({
+                    "program": prog, "field": field, "after": value,
+                    "had": was is not None and field in was,
+                    "before": None if was is None else was.get(field),
+                    "made_program": was is None,
+                })
+    return out
+
+
+def key_changes(before: dict, after: dict) -> dict[str, list[dict]]:
+    rebound, added = [], []
+    for section, binds in after.items():
+        old = before.get(section)
+        if not isinstance(binds, dict):
+            continue
+        for key, action in binds.items():
+            if isinstance(old, dict) and key in old:
+                if old[key] != action:
+                    rebound.append({"section": section, "key": key, "before": old[key], "after": action})
+            else:
+                added.append({"section": section, "key": key, "after": action,
+                              "made_section": not isinstance(old, dict)})
+    return {"rebound": rebound, "added": added}
+
+
+def revert_programs(current: dict, changes: list[dict]) -> tuple[dict, list[str]]:
+    out, notes = json.loads(json.dumps(current)), []
+    programs = out.get("programs")
+    if not isinstance(programs, dict):
+        return out, notes
+    for c in changes:
+        entry = programs.get(c["program"])
+        if not isinstance(entry, dict) or entry.get(c["field"]) != c["after"]:
+            notes.append(f"programs.json: {c['program']}.{c['field']} is not as install left it: kept")
+            continue
+        if c["had"]:
+            entry[c["field"]] = c["before"]
+        else:
+            del entry[c["field"]]
+            if not entry and c["made_program"]:
+                del programs[c["program"]]
+    return out, notes
+
+
+def revert_keys(current: dict, record: dict) -> tuple[dict, list[str]]:
+    out, notes = json.loads(json.dumps(current)), []
+    for c in record.get("rebound", []):
+        section = out.get(c["section"])
+        if isinstance(section, dict) and section.get(c["key"]) == c["after"]:
+            section[c["key"]] = c["before"]
+        else:
+            notes.append(f"keys.json: {c['key']} in {c['section']} is not as install left it: kept")
+    for c in record.get("added", []):
+        section = out.get(c["section"])
+        if isinstance(section, dict) and section.get(c["key"]) == c["after"]:
+            del section[c["key"]]
+            if not section and c.get("made_section"):
+                del out[c["section"]]
+    return out, notes
+
+
+def bindings_text() -> list[str]:
+    """The bindings to add by hand, as lines for a person to read."""
+    lines = [f'  replace "{PICKER}" with "{ORMUS_PICKER}" wherever a key opens it,']
+    for section, binds in ORMUS_KEYS.items():
+        for key, action in binds.items():
+            lines.append(f'  in "{section}": "{key}": "{action}"')
+    return lines

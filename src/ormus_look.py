@@ -30,7 +30,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -45,15 +45,14 @@ DEFAULT_HOME = "~/.config/herdr-app"
 MANIFEST = ".ormus-look.json"
 HERDR_VERSION = "0.1.15"  # the Herdr version the anchors and the cloned files come from
 DEFAULT_THEME = "ormus-gold"
-# The repo spells one word of Herdr's UI API with an escape, so the repo's own scrub
-# of client names does not flag a common word. The install writes the plain word.
+# The repo writes one word of Herdr's UI API with an escape; the install writes it plainly.
 SHIELD = ("hov\\u0065r", "hov" + "er")
 TEXT_SUFFIXES = {".js", ".json"}
 SKIP_NAMES = {"gpui-kit.d.ts", "jsconfig.json"}
 ENTRY_KEYS = {"logo", "bg", "pad", "accent", "letter"}
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 LOGO_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(svg|png)$")
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+PNG_MAGIC = bytes.fromhex("89504e470d0a1a0a")
 # Herdr's own mods the look is built from, and the Ormus mods they become.
 PATCHED = {"spaces": "ormus-spaces", "picker": "ormus-picker", "pane": "ormus-pane"}
 TITLES = {"spaces": "Spaces (Ormus)", "picker": "Picker (Ormus)", "pane": "Pane header (Ormus)"}
@@ -187,9 +186,12 @@ def read_upstream(home: Path, name: str) -> tuple[str, str]:
     return (folder / "main.js").read_text(encoding="utf-8"), (folder / "mod.json").read_text(encoding="utf-8")
 
 
-def build(config: Config, home: Path) -> dict[str, bytes]:
-    """Every file of the install, by its path in the Herdr home. Stops when an anchor is gone."""
+def build(config: Config, home: Path) -> tuple[dict[str, bytes], dict[str, int]]:
+    """Every file of the install, by its path in the Herdr home, and how many edits each patch made.
+
+    Stops when an anchor is gone."""
     files = payload()
+    counts: dict[str, int] = {}
     table = {
         name: {k: v for k, v in entry.items() if k in ENTRY_KEYS}
         for name, entry in config.spaces.items()
@@ -202,7 +204,12 @@ def build(config: Config, home: Path) -> dict[str, bytes]:
     }
     for upstream, ours in PATCHED.items():
         main_js, mod_json = read_upstream(home, upstream)
-        files[f"mods/{ours}/main.js"] = patchers[upstream](main_js).encode("utf-8")
+        patched, counts[upstream] = space_tiles.counted(patchers[upstream], main_js)
+        header = (
+            f"// Modified from Herdr's `{upstream}` mod (herdr-app {HERDR_VERSION}, Apache License 2.0, "
+            "https://herdr.dev)\n// by playbook-herdr-ormus-look. See NOTICE.\n"
+        )
+        files[f"mods/{ours}/main.js"] = (header + patched).encode("utf-8")
         files[f"mods/{ours}/mod.json"] = space_tiles.mod_json(
             mod_json, upstream, TITLES[upstream], HERDR_VERSION
         ).encode("utf-8")
@@ -210,7 +217,7 @@ def build(config: Config, home: Path) -> dict[str, bytes]:
     for entry in config.spaces.values():
         if "logo" in entry:
             files[f"mods/ormus-spaces/logos/{entry['logo']}"] = (config.logos / entry["logo"]).read_bytes()
-    return files
+    return files, counts
 
 
 def top_paths(files: dict[str, bytes]) -> list[str]:
@@ -220,10 +227,6 @@ def top_paths(files: dict[str, bytes]) -> list[str]:
         parts = rel.split("/")
         tops.add("/".join(parts[:2]) if parts[0] == "mods" else rel)
     return sorted(tops)
-
-
-def sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def read_manifest(home: Path) -> dict:
@@ -244,70 +247,135 @@ def conflicts(home: Path, files: dict[str, bytes], owned: set[str]) -> list[str]
     return found
 
 
-def install(config: Config, home: Path, keys: bool) -> list[str]:
+def read_json_file(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise Stop(f"{path.name} is not valid JSON ({e}). Fix it or move it away. Nothing was written.") from e
+
+
+@dataclass
+class SettingsPlan:
+    """What install would do to programs.json and keys.json, worked out before anything is written."""
+
+    programs_path: Path
+    programs_before: dict
+    programs_after: dict
+    programs_existed: bool
+    programs_changes: list[dict]
+    keys_path: Path
+    keys_before: dict | None = None  # None: keys.json is left alone
+    keys_after: dict | None = None
+    key_record: dict = field(default_factory=lambda: {"rebound": [], "added": []})
+    key_left: list[str] = field(default_factory=list)
+    key_note: str = ""
+
+
+def plan_settings(home: Path, keys: bool) -> SettingsPlan:
+    """Read and type-check both files; a typo or a wrong shape stops here, before any write."""
+    ormus = json.loads((ROOT / "mods/ormus-chrome/programs.ormus.json").read_text())
+    path = home / "programs.json"
+    existed = path.exists()
+    mine = read_json_file(path) if existed else {}
+    try:
+        merge_home.check_programs(mine, ormus)
+    except merge_home.BadFile as e:
+        raise Stop(f"{e}. Nothing was written.") from e
+    assert isinstance(mine, dict)
+    after = merge_home.merge(mine, ormus)
+    plan = SettingsPlan(path, mine, after, existed, merge_home.program_changes(mine, after), home / "keys.json")
+    if not keys:
+        plan.key_note = "skipped (--no-keys)"
+    elif not plan.keys_path.exists():
+        plan.key_note = "none in the home: Herdr's default keys stay"
+    else:
+        raw = read_json_file(plan.keys_path)
+        try:
+            merge_home.check_keys(raw)
+        except merge_home.BadFile as e:
+            raise Stop(f"{e}. Nothing was written.") from e
+        assert isinstance(raw, dict)
+        plan.keys_before = raw
+        plan.keys_after, plan.key_left = merge_home.add_keys(merge_home.rebind(raw))
+        plan.key_record = merge_home.key_changes(raw, plan.keys_after)
+    return plan
+
+
+def prepare(config: Config, home: Path, keys: bool) -> tuple[dict[str, bytes], dict[str, int], SettingsPlan]:
+    """Everything install needs, checked, with nothing written."""
     if not home.is_dir():
         raise Stop(f"no Herdr home at {home}")
-    files = build(config, home)
-    old = read_manifest(home)
-    owned = set(old.get("paths", []))
-    clash = conflicts(home, files, owned)
+    files, counts = build(config, home)
+    settings = plan_settings(home, keys)
+    clash = conflicts(home, files, set(read_manifest(home).get("paths", [])))
     if clash:
         raise Stop(
             "these exist in the Herdr home and were not made by this tool, so nothing was written: "
             + ", ".join(clash)
         )
-    for top in top_paths(files):
-        target = home / top
-        if target.is_dir():
-            shutil.rmtree(target)
-    for rel, data in files.items():
-        target = home / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    settings = settings_install(home, keys, old.get("settings", {}))
-    manifest = {"paths": top_paths(files), "settings": settings, "tool": "playbook-herdr-ormus-look"}
+    return files, counts, settings
+
+
+def merge_records(earlier: list[dict], new: list[dict], key: tuple[str, ...]) -> list[dict]:
+    """A change from this install replaces an earlier one for the same value; the rest stay."""
+    fresh = {tuple(c[k] for k in key) for c in new}
+    return [c for c in earlier if tuple(c[k] for k in key) not in fresh] + new
+
+
+def write_json(path: Path, data: dict, backup: bool) -> None:
+    if backup and path.exists():
+        copy = path.with_name(path.name + ".bak-pre-ormus")
+        if not copy.exists():
+            copy.write_text(path.read_text())
+    tmp = path.with_name(path.name + ".tmp-ormus")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+
+
+def install(config: Config, home: Path, keys: bool) -> list[str]:
+    files, counts, sp = prepare(config, home, keys)
+    old = read_manifest(home)
+    earlier = old.get("settings", {})
+    prog_rec = earlier.get("programs.json", {})
+    key_rec = earlier.get("keys.json", {})
+    settings = {
+        "programs.json": {
+            "created": bool(prog_rec.get("created")) or not sp.programs_existed,
+            "changes": merge_records(prog_rec.get("changes", []), sp.programs_changes, ("program", "field")),
+        },
+        "keys.json": {
+            "rebound": merge_records(key_rec.get("rebound", []), sp.key_record["rebound"], ("section", "key")),
+            "added": merge_records(key_rec.get("added", []), sp.key_record["added"], ("section", "key")),
+        },
+    }
+    # The manifest goes first: whatever happens next, undo knows what to take out.
+    manifest = {"paths": sorted(set(old.get("paths", [])) | set(top_paths(files))),
+                "settings": settings, "tool": "playbook-herdr-ormus-look"}
     (home / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n")
-    return report(files, settings, config)
+    try:
+        for top in top_paths(files):
+            target = home / top
+            if target.is_dir():
+                shutil.rmtree(target)
+        for rel, data in files.items():
+            target = home / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        if sp.programs_after != sp.programs_before:
+            write_json(sp.programs_path, sp.programs_after, backup=True)
+        if sp.keys_after is not None and sp.keys_after != sp.keys_before:
+            write_json(sp.keys_path, sp.keys_after, backup=True)
+    except OSError as e:
+        raise Stop(f"{e}. The install stopped part-way; run `undo` to take out what it wrote.") from e
+    return report(files, counts, sp)
 
 
-def settings_install(home: Path, keys: bool, earlier: dict) -> dict:
-    """Set Claude's icon and the keys in the person's own files; record what was written."""
-    record: dict[str, dict] = {}
-    ormus = json.loads((ROOT / "mods/ormus-chrome/programs.ormus.json").read_text())
-    for name, change in (("programs.json", None), ("keys.json", keys)):
-        path = home / name
-        existed = path.exists()
-        if name == "programs.json":
-            mine = json.loads(path.read_text()) if existed else {}
-            changed = merge_home.write(path, mine, merge_home.merge(mine, ormus))
-            note = "Claude's icon set" if changed else "already set"
-            left: list[str] = []
-        else:
-            if not change or not existed:
-                reason = "skipped (--no-keys)" if not change else "none in the home: Herdr's default keys stay"
-                record[name] = {"note": reason}
-                continue
-            before = json.loads(path.read_text())
-            after, left = merge_home.add_keys(merge_home.rebind(before))
-            changed = merge_home.write(path, before, after)
-            note = "picker keys open ormus-picker, Ormus keys added" if changed else "already set"
-        record[name] = {
-            "note": note,
-            "left_out": left,
-            # a file an earlier install made stays "made by the install" when this one changes nothing
-            "created": (changed and not existed) or (not changed and earlier.get(name, {}).get("created", False)),
-            "sha": sha(path) if path.exists() else "",
-        }
-    return record
-
-
-def report(files: dict[str, bytes], settings: dict, config: Config) -> list[str]:
+def report(files: dict[str, bytes], counts: dict[str, int], sp: SettingsPlan) -> list[str]:
     lines = ["Built from Herdr's shipped mods (mods/spaces, mods/picker, mods/pane):"]
     for upstream, ours in PATCHED.items():
-        edits = {"spaces": 3, "picker": 3, "pane": 10}[upstream]
         extra = sorted(r.split("/")[-1] for r in files if r.startswith(f"mods/{ours}/logos/"))
         logos = f", logos/{', logos/'.join(extra)}" if extra else ""
-        lines.append(f"  mods/{ours}/  main.js ({edits} edits), mod.json{logos}")
+        lines.append(f"  mods/{ours}/  main.js ({counts[upstream]} edits), mod.json{logos}")
     lines.append("Copied as they are:")
     lines.append("  layouts/ormus.json, layouts/ormus.svg")
     themes = sorted(Path(r).stem for r in files if r.startswith("themes/"))
@@ -315,35 +383,88 @@ def report(files: dict[str, bytes], settings: dict, config: Config) -> list[str]
     for mod in sorted({r.split('/')[1] for r in files if r.startswith("mods/")} - set(PATCHED.values())):
         count = sum(1 for r in files if r.startswith(f"mods/{mod}/"))
         lines.append(f"  mods/{mod}/  {count} files" + (" (tiles.js is built from your config)" if mod == "ormus-needs" else ""))
-    for name, rec in settings.items():
-        lines.append(f"{name}: {rec['note']}")
-        for key in rec.get("left_out", []):
-            lines.append(f"{name}: left out {key}: bind it by hand if you want it")
+    lines.append("programs.json: " + ("Claude's icon set" if sp.programs_after != sp.programs_before else "already set"))
+    if sp.keys_after is None:
+        lines.append(f"keys.json: not changed ({sp.key_note}). To get the shortcuts, add these by hand:")
+        lines += merge_home.bindings_text()
+    else:
+        lines.append("keys.json: " + ("picker keys open ormus-picker, Ormus keys added"
+                                      if sp.keys_after != sp.keys_before else "already set"))
+        lines += [f"keys.json: left out {k}: bind it by hand if you want it" for k in sp.key_left]
     return lines
+
+
+def safe_top(home: Path, top: object) -> Path:
+    """A path from the manifest, only when it is one of the look's own files inside the home."""
+    parts = PurePosixPath(str(top)).parts
+    ok = (
+        len(parts) == 2
+        and parts[0] in ("layouts", "themes", "mods")
+        and re.match(r"^ormus[-.]", parts[1]) is not None
+        and ".." not in parts
+        and not str(top).startswith("/")
+    )
+    target = home / str(top)
+    if not ok or home.resolve() not in target.resolve().parents:
+        raise Stop(f"the manifest names {top!r}, which is not one of this tool's files in the home: nothing was removed")
+    return target
+
+
+def undo_settings(home: Path, settings: dict) -> list[str]:
+    lines = []
+    prog = settings.get("programs.json", {})
+    path = home / "programs.json"
+    if path.is_file() and prog.get("changes"):
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            lines.append("  programs.json is not valid JSON now: kept as it is")
+        else:
+            after, notes = merge_home.revert_programs(current, prog["changes"])
+            lines += [f"  {n}" for n in notes]
+            if after != current:
+                if prog.get("created") and after in ({}, {"programs": {}}):
+                    path.unlink()
+                    lines.append("  programs.json removed (the install made it, nothing else is in it)")
+                else:
+                    write_json(path, after, backup=False)
+                    lines.append("  programs.json: the values install set were put back")
+    keys = settings.get("keys.json", {})
+    path = home / "keys.json"
+    if path.is_file() and (keys.get("rebound") or keys.get("added")):
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            lines.append("  keys.json is not valid JSON now: kept as it is")
+        else:
+            after, notes = merge_home.revert_keys(current, keys)
+            lines += [f"  {n}" for n in notes]
+            if after != current:
+                write_json(path, after, backup=False)
+                lines.append("  keys.json: the keys install changed or added were put back; your other keys stay")
+    return lines
+
+
+def drop_spent_backup(path: Path) -> None:
+    """The courtesy copy from before the first install goes when the file reads the same as it again."""
+    backup = path.with_name(path.name + ".bak-pre-ormus")
+    if backup.is_file() and path.is_file():
+        try:
+            if json.loads(backup.read_text()) == json.loads(path.read_text()):
+                backup.unlink()
+        except json.JSONDecodeError:
+            pass
 
 
 def undo(home: Path) -> list[str]:
     manifest = read_manifest(home)
     if not manifest:
         raise Stop(f"no {MANIFEST} in {home}: nothing from this tool to undo")
-    lines = []
-    for name, rec in manifest.get("settings", {}).items():
-        path = home / name
-        backup = path.with_name(path.name + ".bak-pre-ormus")
-        if not rec.get("sha"):
-            continue
-        if not path.exists():
-            continue
-        if sha(path) != rec["sha"]:
-            lines.append(f"  {name} changed after install: kept as it is (the copy from before install: {backup.name})")
-        elif backup.exists():
-            backup.replace(path)
-            lines.append(f"  {name} restored from its backup")
-        elif rec.get("created"):
-            path.unlink()
-            lines.append(f"  {name} removed (the install made it)")
-    for top in manifest.get("paths", []):
-        target = home / top
+    targets = [(top, safe_top(home, top)) for top in manifest.get("paths", [])]  # all checked before any removal
+    lines = undo_settings(home, manifest.get("settings", {}))
+    for name in ("programs.json", "keys.json"):
+        drop_spent_backup(home / name)
+    for top, target in targets:
         if target.is_dir():
             shutil.rmtree(target)
         elif target.exists():
@@ -365,12 +486,19 @@ def next_steps(theme: str = DEFAULT_THEME) -> list[str]:
 # ---- the demo ------------------------------------------------------------------------------
 
 
+def file_state(path: Path) -> str:
+    """A JSON file by what it says (its layout may differ), any other file by its bytes."""
+    data = path.read_bytes()
+    if path.suffix == ".json":
+        try:
+            return "json:" + json.dumps(json.loads(data), sort_keys=True)
+        except json.JSONDecodeError:
+            pass
+    return hashlib.sha256(data).hexdigest()
+
+
 def tree_state(folder: Path) -> dict[str, str]:
-    return {
-        p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(folder.rglob("*"))
-        if p.is_file()
-    }
+    return {p.relative_to(folder).as_posix(): file_state(p) for p in sorted(folder.rglob("*")) if p.is_file()}
 
 
 def demo() -> str:
@@ -423,13 +551,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     config = load_config(args.config)
     if args.cmd == "check":
-        if not home.is_dir():
-            raise Stop(f"no Herdr home at {home}")
-        files = build(config, home)
-        clash = conflicts(home, files, set(read_manifest(home).get("paths", [])))
-        if clash:
-            raise Stop("these exist and were not made by this tool: " + ", ".join(clash))
-        print(f"check: the patch fits Herdr's mods in {home}; install would write {len(files)} files")
+        files, _, settings = prepare(config, home, keys=True)
+        print(f"check: the patch fits Herdr's mods in {home}; programs.json and keys.json are readable; "
+              f"install would write {len(files)} files")
         return
     print("\n".join(install(config, home, keys=not args.no_keys) + [""] + next_steps()))
 
