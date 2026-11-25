@@ -55,7 +55,8 @@ def rebind(keys: dict) -> dict:
             elif (
                 isinstance(action, dict)
                 and action.get("command") == "mod.open"
-                and (action.get("args") or {}).get("name") == "picker"
+                and isinstance(action.get("args"), dict)
+                and action["args"].get("name") == "picker"
             ):
                 action["args"]["name"] = "ormus-picker"
     return out
@@ -201,11 +202,11 @@ def revert_programs(current: dict, changes: list[dict]) -> tuple[dict, list[str]
         if not isinstance(entry, dict) or entry.get(c["field"]) != c["after"]:
             notes.append(f"programs.json: {c['program']}.{c['field']} is not as install left it: kept")
             continue
-        if c["had"]:
-            entry[c["field"]] = c["before"]
+        if c.get("had"):
+            entry[c["field"]] = c.get("before")
         else:
             del entry[c["field"]]
-            if not entry and c["made_program"]:
+            if not entry and c.get("made_program"):
                 del programs[c["program"]]
     return out, notes
 
@@ -215,7 +216,7 @@ def revert_keys(current: dict, record: dict) -> tuple[dict, list[str]]:
     for c in record.get("rebound", []):
         section = out.get(c["section"])
         if isinstance(section, dict) and section.get(c["key"]) == c["after"]:
-            section[c["key"]] = c["before"]
+            section[c["key"]] = c.get("before")
         else:
             notes.append(f"keys.json: {c['key']} in {c['section']} is not as install left it: kept")
     for c in record.get("added", []):

@@ -7,10 +7,11 @@ file, but it is the same word once a program reads it. This check closes that ga
 
   - it decodes the backslash-u escapes in every text file and runs your deny-list
     on the decoded text; the one word the repo spells with an escape on purpose
-    (SHIELD below) is the only exception;
+    (SHIELD below) is skipped only for a deny-list entry that is exactly that word;
   - it refuses the other ways to spell letters without typing them: hex escapes
-    (backslash-x), the char-code functions of JavaScript and Python, and numeric
-    HTML entities.
+    (backslash-x), octal, named and doubled escapes, CSS escapes, the char-code and
+    decoding functions of JavaScript and Python, numeric HTML entities, runs of
+    percent codes, and letters outside ASCII in code files (lookalikes).
 
 Usage: python3 scripts/decoded_scrub.py [dir]
 The deny-list path is $PLAYBOOK_DENYLIST, default ~/.config/playbooks/denylist.txt;
@@ -22,24 +23,39 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 SHIELD = "hov" + "\\" + "u0065r"  # the one escaped word that is allowed, as typed in the files
+SHIELD_WORD = "hov" + "er"  # what it decodes to
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
+CODE_SUFFIXES = {".js", ".mjs", ".py", ".sh", ".css", ".html", ".ts"}
+BS = re.escape(chr(92))  # a backslash, as a regex piece, so this file never types an escape itself
 RULES = {
-    "hex-escape": re.compile(r"\\x[0-9a-fA-F]{2}"),
-    "char-code-function": re.compile(r"fromChar" + r"Code|fromCode" + r"Point|\bchr\("),
-    "html-entity": re.compile(r"&#[xX]?[0-9a-fA-F]+;"),
+    "hex-escape": re.compile(BS + r"x[0-9a-fA-F]{2}"),
+    "wide-escape": re.compile(BS + r"U[0-9a-fA-F]{8}"),
+    "named-escape": re.compile(BS + r"N\{"),
+    "octal-escape": re.compile(BS + r"[0-7]{3}"),
+    "double-escape": re.compile(BS + BS + r"(?:u[0-9a-fA-F]{4}|u" + re.escape("{") + r"|x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8}|N" + re.escape("{") + ")"),
+    "char-code-function": re.compile(
+        r"fromChar" + r"Code|fromCode" + r"Point|\bchr\(|\batob\(|\bunescape\(|decodeURI" + r"Component\(|from" + r"hex\(|rot" + "13",
+        re.I,
+    ),
+    "html-entity": re.compile(r"&#[xX]?[0-9a-fA-F]+"),
+    "percent-run": re.compile(r"(?:%[0-9a-fA-F]{2}){2,}"),
 }
-UNICODE = re.compile(r"\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})")
+CSS_ESCAPE = re.compile(BS + r"[0-9a-fA-F]{1,6}")  # a CSS escape, checked in CSS files only
+UNICODE = re.compile(BS + r"u\{([0-9a-fA-F]{1,8})\}|" + BS + r"u([0-9a-fA-F]{4})|" + BS + r"U([0-9a-fA-F]{8})")
 
 
-def decode(line: str) -> str:
-    line = line.replace(SHIELD, "\x00")  # the allowed word stays out of the match
-    return UNICODE.sub(lambda m: chr(int(m.group(1) or m.group(2), 16)), line)
+def decode(line: str, blank_shield: bool = False) -> str:
+    """The line as a program reads it. Raises ValueError on a code point that does not exist."""
+    if blank_shield:
+        line = line.replace(SHIELD, "\x00")
+    return UNICODE.sub(lambda m: chr(int(m.group(1) or m.group(2) or m.group(3), 16)), line)
 
 
-def load_denylist() -> list[re.Pattern[str]]:
+def load_denylist() -> list[tuple[re.Pattern[str], bool]]:
     path = Path(os.environ.get("PLAYBOOK_DENYLIST") or "~/.config/playbooks/denylist.txt").expanduser()
     if not path.is_file():
         return []
@@ -50,7 +66,8 @@ def load_denylist() -> list[re.Pattern[str]]:
             continue
         words = [re.escape(w) for w in re.split(r"[\s._-]+", entry) if w]
         body = r"[\s._-]?".join(words)
-        patterns.append(re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.I))
+        only_shield = [w.lower() for w in re.split(r"[\s._-]+", entry) if w] == [SHIELD_WORD]
+        patterns.append((re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.I), only_shield))
     return patterns
 
 
@@ -68,17 +85,34 @@ def main() -> int:
         except (UnicodeDecodeError, OSError):
             continue
         checked += 1
+        code = file.suffix in CODE_SUFFIXES or file.suffix == ".json"
         for n, line in enumerate(text.splitlines(), 1):
+            where = f"{file.relative_to(root)}:{n}"
             for rule, rx in RULES.items():
                 if rx.search(line):
-                    print(f"{file.relative_to(root)}:{n}: {rule}")
+                    print(f"{where}: {rule}")
                     found += 1
-            decoded = decode(line)
-            if decoded != line.replace(SHIELD, "\x00") or "\\" in line:
-                for i, rx in enumerate(deny, 1):
-                    if rx.search(decoded) and not rx.search(line.replace(SHIELD, "\x00")):
-                        print(f"{file.relative_to(root)}:{n}: deny-list entry {i} (after decoding escapes)")
-                        found += 1
+            if file.suffix == ".css" and CSS_ESCAPE.search(line):
+                print(f"{where}: css-escape")
+                found += 1
+            if code and any(unicodedata.category(c).startswith("L") and ord(c) > 127 for c in line):
+                print(f"{where}: non-ascii-letter (a lookalike letter can spell a word)")
+                found += 1
+            try:
+                full, blank = decode(line), decode(line, blank_shield=True)
+            except (ValueError, OverflowError):
+                print(f"{where}: invalid-escape")
+                found += 1
+                continue
+            if full == line and "\\" not in line:
+                continue
+            for i, (rx, only_shield) in enumerate(deny, 1):
+                # An entry that is exactly the shielded word skips the shielded spelling; every
+                # other entry, also one that has that word inside it, reads the fully decoded text.
+                seen = rx.search(blank if only_shield else full)
+                if seen and not rx.search(line):
+                    print(f"{where}: deny-list entry {i} (after decoding escapes)")
+                    found += 1
     status = "FAILED" if found else "clean"
     print(f"decoded-scrub: {status} ({checked} text files, deny-list: {len(deny)} entries, {found} findings)")
     return 1 if found else 0

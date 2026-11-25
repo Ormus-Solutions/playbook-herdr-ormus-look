@@ -85,7 +85,7 @@ class InstallTest(TempHome):
         theme = json.loads((self.home / "themes/ormus-gold.json").read_text())
         self.assertIn(POINTER, theme["colors"])
         text = (self.home / "mods/ormus-chrome/main.js").read_text()
-        self.assertNotIn("\\u0065", text)
+        self.assertNotIn("\\" + "u0065", text)
         self.assertIn(f".{POINTER}(", text)
         self.assertIn(f".{POINTER}(", (self.home / "mods/ormus-pane/main.js").read_text())
 
@@ -568,6 +568,178 @@ class DecodedScrubTest(unittest.TestCase):
         done = subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(ROOT)],
                               capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stdout)
+
+
+class ManifestAndLinksTest(TempHome):
+    """Re-review: a damaged manifest, odd settings files, symlinked folders, modes."""
+
+    BAD = ["", '{"paths": [', "[]", '{"settings": []}', '{"paths": [1]}',
+           '{"settings": {"programs.json": {"changes": [{"after": 1}]}}}',
+           '{"settings": {"keys.json": {"added": "x"}}}']
+
+    def test_a_damaged_manifest_stops_install_and_undo_with_a_message(self) -> None:
+        for text in self.BAD:
+            with self.subTest(manifest=text):
+                (self.home / ol.MANIFEST).write_text(text)
+                for action in (lambda: self.install(), lambda: ol.undo(self.home)):
+                    with self.assertRaises(SystemExit) as raised:
+                        action()
+                    self.assertIn(ol.MANIFEST, str(raised.exception))
+                self.assertFalse((self.home / "mods/ormus-chrome").exists())
+
+    def test_the_manifest_is_written_in_one_step(self) -> None:
+        self.install()
+        self.assertEqual(list(self.home.glob("*.tmp-ormus")), [])
+        self.assertIsNone(ol.manifest_problem(json.loads((self.home / ol.MANIFEST).read_text())))
+
+    @unittest.skipIf(hasattr(__import__("os"), "geteuid") and __import__("os").geteuid() == 0, "root ignores modes")
+    def test_a_read_only_home_gives_a_message_not_a_traceback(self) -> None:
+        self.home.chmod(0o555)
+        try:
+            with self.assertRaises(SystemExit) as raised:
+                self.install()
+        finally:
+            self.home.chmod(0o755)
+        self.assertNotIsInstance(raised.exception.code, int)
+
+    def test_undo_skips_a_settings_file_that_is_no_longer_an_object(self) -> None:
+        for name, text in (("keys.json", "[]"), ("programs.json", "3"), ("keys.json", '"x"')):
+            with self.subTest(file=name, text=text):
+                home = self.tmp / f"h-{name}-{len(text)}"
+                shutil.copytree(EXAMPLES / "herdr-home", home)
+                ol.install(self.config, home, True)
+                (home / name).write_text(text)
+                lines = ol.undo(home)
+                self.assertTrue(any(name in x and "kept as it is" in x for x in lines), lines)
+                self.assertEqual((home / name).read_text(), text)
+                self.assertFalse((home / "mods/ormus-chrome").exists())
+
+    def test_symlinked_mods_and_layouts_folders_work(self) -> None:
+        elsewhere = self.tmp / "dotfiles"
+        for name in ("mods", "layouts", "themes"):
+            (elsewhere).mkdir(exist_ok=True)
+            if (self.home / name).exists():
+                shutil.move(str(self.home / name), str(elsewhere / name))
+            else:
+                (elsewhere / name).mkdir()
+            (self.home / name).symlink_to(elsewhere / name)
+        self.install()
+        self.assertTrue((elsewhere / "mods/ormus-chrome/main.js").is_file())
+        ol.undo(self.home)
+        self.assertFalse((elsewhere / "mods/ormus-chrome").exists())
+        self.assertTrue((elsewhere / "mods/spaces/main.js").is_file())
+
+    def test_a_link_as_the_last_part_must_point_inside_the_home(self) -> None:
+        self.install()
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        shutil.rmtree(self.home / "mods/ormus-search")
+        (self.home / "mods/ormus-search").symlink_to(outside)
+        with self.assertRaises(SystemExit):
+            ol.undo(self.home)
+        self.assertTrue((outside / "keep.txt").is_file())
+        (self.home / "mods/ormus-search").unlink()
+        (self.home / "mods/inside").mkdir()
+        (self.home / "mods/ormus-search").symlink_to(self.home / "mods/inside")
+        ol.undo(self.home)  # removes the link, not the folder it points to
+        self.assertTrue((self.home / "mods/inside").is_dir())
+        self.assertFalse((self.home / "mods/ormus-search").exists())
+
+    def test_odd_action_shapes_in_keys_json_do_not_crash_install(self) -> None:
+        keys = json.loads((self.home / "keys.json").read_text())
+        keys["global"]["a"] = {"command": "mod.open", "args": "picker"}
+        keys["global"]["b"] = {"command": "mod.open", "args": ["picker"]}
+        keys["global"]["c"] = {"command": "mod.open", "args": None}
+        keys["global"]["d"] = 5
+        (self.home / "keys.json").write_text(json.dumps(keys))
+        self.install()
+        after = json.loads((self.home / "keys.json").read_text())
+        self.assertEqual(after["global"]["a"], {"command": "mod.open", "args": "picker"})
+        self.assertEqual(after["global"]["ctrl-shift-k"], "mod.open:ormus-picker")
+
+    def test_a_mode_and_a_symlink_survive_the_write(self) -> None:
+        real = self.tmp / "dotfiles-keys.json"
+        shutil.move(str(self.home / "keys.json"), real)
+        (self.home / "keys.json").symlink_to(real)
+        real.chmod(0o600)
+        self.install()
+        self.assertTrue((self.home / "keys.json").is_symlink())
+        self.assertEqual(real.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(real.read_text())["global"]["ctrl-shift-k"], "mod.open:ormus-picker")
+        ol.undo(self.home)
+        self.assertTrue((self.home / "keys.json").is_symlink())
+        self.assertEqual(real.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(real.read_text())["global"]["ctrl-shift-k"], "mod.open:picker")
+
+    def test_a_bad_path_in_the_manifest_does_not_survive_a_new_install(self) -> None:
+        self.install()
+        manifest = json.loads((self.home / ol.MANIFEST).read_text())
+        manifest["paths"].append("../outside")
+        (self.home / ol.MANIFEST).write_text(json.dumps(manifest))
+        lines = self.install()
+        self.assertTrue(any("dropped '../outside'" in x for x in lines))
+        self.assertNotIn("../outside", json.loads((self.home / ol.MANIFEST).read_text())["paths"])
+        ol.undo(self.home)
+
+    def test_the_readme_warns_that_undo_removes_everything_in_the_mod_folders(self) -> None:
+        text = (ROOT / "README.md").read_text()
+        self.assertIn("including files you put there", text)
+
+
+class DecodedScrubMoreTest(unittest.TestCase):
+    BS = "\\"
+
+    def run_scrub(self, text: str, deny: str = "zebra\n", name: str = "x.js") -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "repo"
+            folder.mkdir()
+            (folder / name).write_text(text)
+            (Path(tmp) / "deny.txt").write_text(deny)
+            env = {"PATH": "/usr/bin:/bin", "PLAYBOOK_DENYLIST": str(Path(tmp) / "deny.txt")}
+            return subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(folder)],
+                                  capture_output=True, text=True, env=env)
+
+    def test_a_multi_word_entry_with_the_shielded_word_is_still_matched(self) -> None:
+        shield = "hov" + self.BS + "u0065r"
+        deny = POINTER + " zebra\n"
+        for text in (f"{shield} zebra", f"{shield}-zebra", f"{shield}zebra", f"{shield} ze" + self.BS + "u0062ra"):
+            with self.subTest(text=text):
+                done = self.run_scrub(text + "\n", deny=deny)
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn("deny-list entry 1", done.stdout)
+                self.assertNotIn("zebra", done.stdout)
+
+    def test_an_exact_entry_still_lets_the_one_spelling_through_and_not_another(self) -> None:
+        shield = "hov" + self.BS + "u0065r"
+        self.assertEqual(self.run_scrub(shield + "(1)\n", deny=POINTER + "\n").returncode, 0)
+        other = "h" + self.BS + "u006fver"
+        self.assertEqual(self.run_scrub(other + "(1)\n", deny=POINTER + "\n").returncode, 1)
+
+    def test_more_ways_to_spell_letters_are_refused(self) -> None:
+        bs = self.BS
+        cases = {
+            "x.js": ["'" + bs + "U00000062'", "'" + bs + "N{LATIN SMALL LETTER B}'", "'" + bs + "142'", "'" + bs + bs + "u0062'",
+                     "&" + "#98", "'%7a" + "%65'", "at" + "ob('x')", "un" + "escape('x')", "decodeURI" + "Component('x')",
+                     "bytes.from" + "hex('62')", "ro" + "t13('x')"],
+            "x.css": ["a::before { content: '" + bs + "62'; }"],
+        }
+        for name, texts in cases.items():
+            for text in texts:
+                with self.subTest(file=name, text=text):
+                    self.assertEqual(self.run_scrub(text + "\n", name=name).returncode, 1)
+
+    def test_an_impossible_code_point_is_a_finding_not_a_crash(self) -> None:
+        done = self.run_scrub("'" + self.BS + "u{FFFFFF}'\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("invalid-escape", done.stdout)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_lookalike_letter_in_code_is_flagged_but_not_in_prose(self) -> None:
+        cyrillic = "z\u0435bra"
+        self.assertEqual(self.run_scrub(f"x = '{cyrillic}'\n").returncode, 1)
+        self.assertEqual(self.run_scrub(f"{cyrillic}\n", name="notes.txt").returncode, 0)
+        self.assertEqual(self.run_scrub("x = 'a \u00b7 b'\n").returncode, 0)  # a middle dot is not a letter
 
 
 @unittest.skipUnless(NODE, "node is not installed")

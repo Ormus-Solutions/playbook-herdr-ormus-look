@@ -46,13 +46,12 @@ MANIFEST = ".ormus-look.json"
 HERDR_VERSION = "0.1.15"  # the Herdr version the anchors and the cloned files come from
 DEFAULT_THEME = "ormus-gold"
 # The repo writes one word of Herdr's UI API with an escape; the install writes it plainly.
-SHIELD = ("hov\\u0065r", "hov" + "er")
+SHIELD = ("hov" + "\\" + "u0065r", "hov" + "er")
 TEXT_SUFFIXES = {".js", ".json"}
 SKIP_NAMES = {"gpui-kit.d.ts", "jsconfig.json"}
 ENTRY_KEYS = {"logo", "bg", "pad", "accent", "letter"}
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 LOGO_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(svg|png)$")
-PNG_MAGIC = bytes.fromhex("89504e470d0a1a0a")
 # Herdr's own mods the look is built from, and the Ormus mods they become.
 PATCHED = {"spaces": "ormus-spaces", "picker": "ormus-picker", "pane": "ormus-pane"}
 TITLES = {"spaces": "Spaces (Ormus)", "picker": "Picker (Ormus)", "pane": "Pane header (Ormus)"}
@@ -117,7 +116,7 @@ def check_entry(name: str, entry: object, logos: Path) -> dict:
         if not file.is_file():
             raise Stop(f"{name}: the logo file {file} is missing")
         head = file.read_bytes()[:512]
-        if not (head.startswith(PNG_MAGIC) or b"<svg" in head.lower() or b"<?xml" in head.lower()):
+        if not (head[1:4] == b"PNG" or b"<svg" in head.lower() or b"<?xml" in head.lower()):
             raise Stop(f"{name}: {logo} is not a PNG or SVG file")
     if "bg" in entry and not (isinstance(entry["bg"], str) and HEX.match(entry["bg"])):
         raise Stop(f"{name}: 'bg' must be a color like #1d2b4f")
@@ -229,9 +228,44 @@ def top_paths(files: dict[str, bytes]) -> list[str]:
     return sorted(tops)
 
 
+def manifest_problem(data: object) -> str | None:
+    """What is wrong with a manifest's shape, or None."""
+    if not isinstance(data, dict):
+        return "it must hold a JSON object"
+    paths = data.get("paths", [])
+    if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+        return "'paths' must be a list of text"
+    settings = data.get("settings", {})
+    if not isinstance(settings, dict):
+        return "'settings' must be an object"
+    prog = settings.get("programs.json", {})
+    keys = settings.get("keys.json", {})
+    if not isinstance(prog, dict) or not isinstance(keys, dict):
+        return "the entries of 'settings' must be objects"
+    need = {"changes": ("program", "field"), "rebound": ("section", "key"), "added": ("section", "key")}
+    for owner, name in ((prog, "changes"), (keys, "rebound"), (keys, "added")):
+        items = owner.get(name, [])
+        if not isinstance(items, list):
+            return f"'{name}' must be a list"
+        for item in items:
+            if not isinstance(item, dict) or not all(isinstance(item.get(k), str) for k in need[name]) or "after" not in item:
+                return f"an entry of '{name}' needs {', '.join(need[name])} as text and an 'after' value"
+    return None
+
+
 def read_manifest(home: Path) -> dict:
     file = home / MANIFEST
-    return json.loads(file.read_text()) if file.is_file() else {}
+    if not file.is_file():
+        return {}
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        raise Stop(f"{file} cannot be read ({e}). Nothing was changed. Fix it, or delete it if you want to start over "
+                   "(then the files this tool wrote stay in place until you remove them by hand).") from e
+    problem = manifest_problem(data)
+    if problem:
+        raise Stop(f"{file}: {problem}. Nothing was changed. Fix it, or delete it if you want to start over.")
+    return data
 
 
 def conflicts(home: Path, files: dict[str, bytes], owned: set[str]) -> list[str]:
@@ -322,14 +356,30 @@ def merge_records(earlier: list[dict], new: list[dict], key: tuple[str, ...]) ->
     return [c for c in earlier if tuple(c[k] for k in key) not in fresh] + new
 
 
+def atomic_write(path: Path, text: str) -> None:
+    """Write through a symlink to its target, keep the file's mode, replace in one step."""
+    target = path.resolve() if path.is_symlink() else path
+    tmp = target.with_name(target.name + ".tmp-ormus")
+    tmp.write_text(text, encoding="utf-8")
+    if target.exists():
+        shutil.copymode(target, tmp)
+    tmp.replace(target)
+
+
 def write_json(path: Path, data: dict, backup: bool) -> None:
     if backup and path.exists():
         copy = path.with_name(path.name + ".bak-pre-ormus")
         if not copy.exists():
-            copy.write_text(path.read_text())
-    tmp = path.with_name(path.name + ".tmp-ormus")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    tmp.replace(path)
+            shutil.copy2(path.resolve(), copy)
+    atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def remove(target: Path) -> None:
+    """Remove a file, a symlink (the link, not what it points to) or a folder."""
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
 
 
 def install(config: Config, home: Path, keys: bool) -> list[str]:
@@ -349,14 +399,15 @@ def install(config: Config, home: Path, keys: bool) -> list[str]:
         },
     }
     # The manifest goes first: whatever happens next, undo knows what to take out.
-    manifest = {"paths": sorted(set(old.get("paths", [])) | set(top_paths(files))),
+    kept = [p for p in old.get("paths", []) if path_ok(p)]
+    dropped = [p for p in old.get("paths", []) if not path_ok(p)]
+    manifest = {"paths": sorted(set(kept) | set(top_paths(files))),
                 "settings": settings, "tool": "playbook-herdr-ormus-look"}
-    (home / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n")
     try:
+        atomic_write(home / MANIFEST, json.dumps(manifest, indent=2) + "\n")
         for top in top_paths(files):
             target = home / top
-            if target.is_dir():
-                shutil.rmtree(target)
+            remove(target)
         for rel, data in files.items():
             target = home / rel
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -367,7 +418,7 @@ def install(config: Config, home: Path, keys: bool) -> list[str]:
             write_json(sp.keys_path, sp.keys_after, backup=True)
     except OSError as e:
         raise Stop(f"{e}. The install stopped part-way; run `undo` to take out what it wrote.") from e
-    return report(files, counts, sp)
+    return [f"manifest: dropped {p!r}, which is not one of this tool's files" for p in dropped] + report(files, counts, sp)
 
 
 def report(files: dict[str, bytes], counts: dict[str, int], sp: SettingsPlan) -> list[str]:
@@ -394,54 +445,68 @@ def report(files: dict[str, bytes], counts: dict[str, int], sp: SettingsPlan) ->
     return lines
 
 
-def safe_top(home: Path, top: object) -> Path:
-    """A path from the manifest, only when it is one of the look's own files inside the home."""
-    parts = PurePosixPath(str(top)).parts
-    ok = (
+def path_ok(top: object) -> bool:
+    """A manifest path is one of the look's own files, judged by its text alone."""
+    if not isinstance(top, str) or top.startswith("/") or "\\" in top:
+        return False
+    parts = PurePosixPath(top).parts
+    return (
         len(parts) == 2
         and parts[0] in ("layouts", "themes", "mods")
         and re.match(r"^ormus[-.]", parts[1]) is not None
         and ".." not in parts
-        and not str(top).startswith("/")
+        and "." not in parts
     )
-    target = home / str(top)
-    if not ok or home.resolve() not in target.resolve().parents:
+
+
+def safe_top(home: Path, top: object) -> Path:
+    """The path of a manifest entry, only when it is the look's own file in this home.
+
+    The text is checked, not the resolved path, so a `mods` or `layouts` folder that is a
+    symlink (a dotfile manager makes them) works. A link as the last part must point inside."""
+    if not path_ok(top):
         raise Stop(f"the manifest names {top!r}, which is not one of this tool's files in the home: nothing was removed")
+    target = home / str(top)
+    if target.is_symlink() and home.resolve() not in target.resolve().parents:
+        raise Stop(f"{top} is a link that points outside the home: nothing was removed")
     return target
 
 
+def read_settings_file(path: Path, lines: list[str]) -> dict | None:
+    """The file as an object, or None with a note: a file that is not an object is kept as it is."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        lines.append(f"  {path.name} is not valid JSON now: kept as it is")
+        return None
+    if not isinstance(data, dict):
+        lines.append(f"  {path.name} is not a JSON object now: kept as it is")
+        return None
+    return data
+
+
 def undo_settings(home: Path, settings: dict) -> list[str]:
-    lines = []
+    lines: list[str] = []
     prog = settings.get("programs.json", {})
     path = home / "programs.json"
-    if path.is_file() and prog.get("changes"):
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            lines.append("  programs.json is not valid JSON now: kept as it is")
-        else:
-            after, notes = merge_home.revert_programs(current, prog["changes"])
-            lines += [f"  {n}" for n in notes]
-            if after != current:
-                if prog.get("created") and after in ({}, {"programs": {}}):
-                    path.unlink()
-                    lines.append("  programs.json removed (the install made it, nothing else is in it)")
-                else:
-                    write_json(path, after, backup=False)
-                    lines.append("  programs.json: the values install set were put back")
+    if path.is_file() and prog.get("changes") and (current := read_settings_file(path, lines)) is not None:
+        after, notes = merge_home.revert_programs(current, prog["changes"])
+        lines += [f"  {n}" for n in notes]
+        if after != current:
+            if prog.get("created") and after in ({}, {"programs": {}}):
+                path.unlink()
+                lines.append("  programs.json removed (the install made it, nothing else is in it)")
+            else:
+                write_json(path, after, backup=False)
+                lines.append("  programs.json: the values install set were put back")
     keys = settings.get("keys.json", {})
     path = home / "keys.json"
-    if path.is_file() and (keys.get("rebound") or keys.get("added")):
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            lines.append("  keys.json is not valid JSON now: kept as it is")
-        else:
-            after, notes = merge_home.revert_keys(current, keys)
-            lines += [f"  {n}" for n in notes]
-            if after != current:
-                write_json(path, after, backup=False)
-                lines.append("  keys.json: the keys install changed or added were put back; your other keys stay")
+    if path.is_file() and (keys.get("rebound") or keys.get("added")) and (current := read_settings_file(path, lines)) is not None:
+        after, notes = merge_home.revert_keys(current, keys)
+        lines += [f"  {n}" for n in notes]
+        if after != current:
+            write_json(path, after, backup=False)
+            lines.append("  keys.json: the keys install changed or added were put back; your other keys stay")
     return lines
 
 
@@ -465,10 +530,7 @@ def undo(home: Path) -> list[str]:
     for name in ("programs.json", "keys.json"):
         drop_spent_backup(home / name)
     for top, target in targets:
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
+        remove(target)
         lines.append(f"  {top} removed")
     (home / MANIFEST).unlink()
     return lines
