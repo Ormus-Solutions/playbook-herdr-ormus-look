@@ -50,6 +50,7 @@ SHIELD = ("hov" + "\\" + "u0065r", "hov" + "er")
 TEXT_SUFFIXES = {".js", ".json"}
 SKIP_NAMES = {"gpui-kit.d.ts", "jsconfig.json"}
 ENTRY_KEYS = {"logo", "bg", "pad", "accent", "letter"}
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"  # the 8 bytes every PNG file starts with
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 LOGO_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(svg|png)$")
 # Herdr's own mods the look is built from, and the Ormus mods they become.
@@ -84,9 +85,9 @@ def load_config(path: str | None) -> Config:
             raise Stop(f"no config at {file}")
         return Config()
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise Stop(f"{file.name} is not valid JSON: {e}") from e
+        data = merge_home.strict_loads(file.read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise Stop(f"{file.name} is not valid JSON ({e})") from e
     if not isinstance(data, dict):
         raise Stop(f"{file.name} must hold a JSON object")
     config = Config(separator=data.get("separator", " · "), logos=file.parent / "logos")
@@ -116,7 +117,7 @@ def check_entry(name: str, entry: object, logos: Path) -> dict:
         if not file.is_file():
             raise Stop(f"{name}: the logo file {file} is missing")
         head = file.read_bytes()[:512]
-        if not (head[1:4] == b"PNG" or b"<svg" in head.lower() or b"<?xml" in head.lower()):
+        if not (head.startswith(PNG_MAGIC) or b"<svg" in head.lower() or b"<?xml" in head.lower()):
             raise Stop(f"{name}: {logo} is not a PNG or SVG file")
     if "bg" in entry and not (isinstance(entry["bg"], str) and HEX.match(entry["bg"])):
         raise Stop(f"{name}: 'bg' must be a color like #1d2b4f")
@@ -258,13 +259,14 @@ def read_manifest(home: Path) -> dict:
     if not file.is_file():
         return {}
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        data = merge_home.strict_loads(file.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as e:
         raise Stop(f"{file} cannot be read ({e}). Nothing was changed. Fix it, or delete it if you want to start over "
                    "(then the files this tool wrote stay in place until you remove them by hand).") from e
     problem = manifest_problem(data)
     if problem:
         raise Stop(f"{file}: {problem}. Nothing was changed. Fix it, or delete it if you want to start over.")
+    assert isinstance(data, dict)  # manifest_problem checked it
     return data
 
 
@@ -283,8 +285,8 @@ def conflicts(home: Path, files: dict[str, bytes], owned: set[str]) -> list[str]
 
 def read_json_file(path: Path) -> object:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        return merge_home.strict_loads(path.read_text(encoding="utf-8"))
+    except ValueError as e:
         raise Stop(f"{path.name} is not valid JSON ({e}). Fix it or move it away. Nothing was written.") from e
 
 
@@ -475,8 +477,8 @@ def safe_top(home: Path, top: object) -> Path:
 def read_settings_file(path: Path, lines: list[str]) -> dict | None:
     """The file as an object, or None with a note: a file that is not an object is kept as it is."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        data = merge_home.strict_loads(path.read_text(encoding="utf-8"))
+    except ValueError:
         lines.append(f"  {path.name} is not valid JSON now: kept as it is")
         return None
     if not isinstance(data, dict):

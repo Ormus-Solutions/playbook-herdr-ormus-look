@@ -527,49 +527,6 @@ class RepoContentTest(unittest.TestCase):
         self.assertIn("ctrl-shift-g", out["layout:ormus"])
 
 
-class DecodedScrubTest(unittest.TestCase):
-    """M4: an escaped word is caught after decoding; only the one shielded word passes."""
-
-    def run_scrub(self, text: str, deny: str = "zebra\n") -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "repo"
-            folder.mkdir()
-            (folder / "x.js").write_text(text)
-            (Path(tmp) / "deny.txt").write_text(deny)
-            env = {"PATH": "/usr/bin:/bin", "PLAYBOOK_DENYLIST": str(Path(tmp) / "deny.txt")}
-            return subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(folder)],
-                                  capture_output=True, text=True, env=env)
-
-    def test_an_escaped_deny_listed_word_is_caught(self) -> None:
-        done = self.run_scrub("const a = 'ze" + "\\" + "u0062ra';\n")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("deny-list entry 1", done.stdout)
-        self.assertNotIn("zebra", done.stdout)
-
-    def test_a_braced_escape_is_caught_too(self) -> None:
-        self.assertEqual(self.run_scrub("x = 'ze" + "\\" + "u{62}ra'\n").returncode, 1)
-
-    def test_other_ways_to_spell_letters_are_refused(self) -> None:
-        for text in ("'" + "\\" + "x7a" + "ebra'", "String.from" + "CharCode(122)", "chr" + "(122)", "&" + "#122;ebra"):
-            with self.subTest(text=text):
-                self.assertEqual(self.run_scrub(text + "\n").returncode, 1)
-
-    def test_the_shielded_word_alone_passes(self) -> None:
-        shielded = "hov" + "\\" + "u0065r"
-        done = self.run_scrub(f"el.{shielded}(1);\n", deny=POINTER + "\n")
-        self.assertEqual(done.returncode, 0, done.stdout)
-
-    def test_a_shielded_word_next_to_another_escaped_word_is_still_caught(self) -> None:
-        shielded = "hov" + "\\" + "u0065r"
-        done = self.run_scrub(f"{shielded} ze" + "\\" + "u0062ra\n", deny=POINTER + "\nzebra\n")
-        self.assertEqual(done.returncode, 1)
-
-    def test_the_repo_itself_passes(self) -> None:
-        done = subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(ROOT)],
-                              capture_output=True, text=True)
-        self.assertEqual(done.returncode, 0, done.stdout)
-
-
 class ManifestAndLinksTest(TempHome):
     """Re-review: a damaged manifest, odd settings files, symlinked folders, modes."""
 
@@ -687,18 +644,57 @@ class ManifestAndLinksTest(TempHome):
         self.assertIn("including files you put there", text)
 
 
-class DecodedScrubMoreTest(unittest.TestCase):
+class DecodedScrubTest(unittest.TestCase):
+    """The deny-list scrub on decoded text: every known escape form is decoded, again until stable."""
+
     BS = "\\"
 
-    def run_scrub(self, text: str, deny: str = "zebra\n", name: str = "x.js") -> subprocess.CompletedProcess[str]:
+    def run_scrub(self, text: str, deny: str = "zorpfoo\n", name: str = "x.js") -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp) / "repo"
             folder.mkdir()
-            (folder / name).write_text(text)
+            (folder / name).write_text(text, encoding="utf-8")
             (Path(tmp) / "deny.txt").write_text(deny)
             env = {"PATH": "/usr/bin:/bin", "PLAYBOOK_DENYLIST": str(Path(tmp) / "deny.txt")}
             return subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(folder)],
                                   capture_output=True, text=True, env=env)
+
+    def test_ordinary_content_passes(self) -> None:
+        bs = self.BS
+        cases = [
+            ("// Caf\u00e9 and Jos\u00e9 wrote this\n", "x.js"),
+            ('{"name": "Caf\u00e9"}\n', "x.json"),
+            ("printf '" + bs + "033[0m'\n", "x.sh"),
+            ("a::before { content: '" + bs + "f101'; }\n", "x.css"),
+            ("https://example.com/Jos%C3%A9\n", "x.md"),
+            ("&" + "#169; 2026\n", "x.html"),
+            ("x = 'a " + bs + "u00b7 b'\n", "x.js"),
+            ("a = 'tab" + bs + "t and newline " + bs + "n'\n", "x.py"),
+        ]
+        for text, name in cases:
+            with self.subTest(text=text):
+                done = self.run_scrub(text, name=name)
+                self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_every_escape_form_that_spells_the_word_is_caught(self) -> None:
+        bs = self.BS
+        forms = [
+            "%7a" + "orpfoo", bs + "u007aorpfoo", bs + "u{7a}orpfoo", bs + "U0000007aorpfoo", bs + "x7aorpfoo",
+            bs + "172orpfoo", bs + "7aorpfoo", "&" + "#122;orpfoo", "&" + "#x7a;orpfoo", "&" + "#122orpfoo",
+            bs + "N{LATIN SMALL LETTER Z}orpfoo", "z%6f" + "rpfoo", "zorp" + bs + "u0066oo",
+            bs + bs + "u007aorpfoo",  # a double escape
+            "%25" + "7aorpfoo",  # a percent code inside a percent code
+        ]
+        for text in forms:
+            with self.subTest(text=text):
+                done = self.run_scrub(text + "\n")
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn("deny-list entry 1", done.stdout)
+                self.assertNotIn("zorpfoo", done.stdout)
+
+    def test_a_css_escape_in_a_css_file_is_caught(self) -> None:
+        done = self.run_scrub("a::before { content: '" + self.BS + "7aorpfoo'; }\n", name="x.css")
+        self.assertEqual(done.returncode, 1)
 
     def test_a_multi_word_entry_with_the_shielded_word_is_still_matched(self) -> None:
         shield = "hov" + self.BS + "u0065r"
@@ -708,26 +704,13 @@ class DecodedScrubMoreTest(unittest.TestCase):
                 done = self.run_scrub(text + "\n", deny=deny)
                 self.assertEqual(done.returncode, 1, done.stdout)
                 self.assertIn("deny-list entry 1", done.stdout)
-                self.assertNotIn("zebra", done.stdout)
 
-    def test_an_exact_entry_still_lets_the_one_spelling_through_and_not_another(self) -> None:
+    def test_an_exact_entry_lets_the_one_spelling_through_and_not_another(self) -> None:
         shield = "hov" + self.BS + "u0065r"
         self.assertEqual(self.run_scrub(shield + "(1)\n", deny=POINTER + "\n").returncode, 0)
         other = "h" + self.BS + "u006fver"
         self.assertEqual(self.run_scrub(other + "(1)\n", deny=POINTER + "\n").returncode, 1)
-
-    def test_more_ways_to_spell_letters_are_refused(self) -> None:
-        bs = self.BS
-        cases = {
-            "x.js": ["'" + bs + "U00000062'", "'" + bs + "N{LATIN SMALL LETTER B}'", "'" + bs + "142'", "'" + bs + bs + "u0062'",
-                     "&" + "#98", "'%7a" + "%65'", "at" + "ob('x')", "un" + "escape('x')", "decodeURI" + "Component('x')",
-                     "bytes.from" + "hex('62')", "ro" + "t13('x')"],
-            "x.css": ["a::before { content: '" + bs + "62'; }"],
-        }
-        for name, texts in cases.items():
-            for text in texts:
-                with self.subTest(file=name, text=text):
-                    self.assertEqual(self.run_scrub(text + "\n", name=name).returncode, 1)
+        self.assertEqual(self.run_scrub("h%6f" + "ver(1)\n", deny=POINTER + "\n").returncode, 1)
 
     def test_an_impossible_code_point_is_a_finding_not_a_crash(self) -> None:
         done = self.run_scrub("'" + self.BS + "u{FFFFFF}'\n")
@@ -735,11 +718,53 @@ class DecodedScrubMoreTest(unittest.TestCase):
         self.assertIn("invalid-escape", done.stdout)
         self.assertNotIn("Traceback", done.stderr)
 
-    def test_a_lookalike_letter_in_code_is_flagged_but_not_in_prose(self) -> None:
-        cyrillic = "z\u0435bra"
-        self.assertEqual(self.run_scrub(f"x = '{cyrillic}'\n").returncode, 1)
-        self.assertEqual(self.run_scrub(f"{cyrillic}\n", name="notes.txt").returncode, 0)
-        self.assertEqual(self.run_scrub("x = 'a \u00b7 b'\n").returncode, 0)  # a middle dot is not a letter
+    def test_what_it_does_not_cover_is_said_in_the_readme(self) -> None:
+        text = (ROOT / "README.md").read_text()
+        for word in ("string concatenation", "lookalike letters", "zero-width", "base64"):
+            self.assertIn(word, text)
+
+    def test_the_repo_itself_passes(self) -> None:
+        done = subprocess.run([sys.executable, str(ROOT / "scripts/decoded_scrub.py"), str(ROOT)],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+
+class StrictInputTest(TempHome):
+    def test_a_number_too_big_for_a_float_stops(self) -> None:
+        for name, text in (("keys.json", '{"global": {"a": 1e400}}'), ("programs.json", '{"programs": {"x": {"n": -1e999}}}'),
+                           ("keys.json", '{"n": NaN}'), ("programs.json", '{"n": Infinity}')):
+            with self.subTest(file=name, text=text):
+                (self.home / name).write_text(text)
+                before = ol.tree_state(self.home)
+                with self.assertRaises(SystemExit) as raised:
+                    self.install()
+                self.assertIn(f"{name} is not valid JSON", str(raised.exception))
+                self.assertIn("not finite", str(raised.exception))
+                self.assertEqual(ol.tree_state(self.home), before)
+                shutil.copy(EXAMPLES / "herdr-home/keys.json", self.home / "keys.json")
+                (self.home / "programs.json").unlink(missing_ok=True)
+
+    def test_the_config_refuses_a_non_finite_number_too(self) -> None:
+        shutil.copytree(EXAMPLES / "logos", self.tmp / "logos")
+        (self.tmp / "spaces.json").write_text('{"spaces": {"a": {"pad": 1e400}}}')
+        with self.assertRaises(SystemExit) as raised:
+            ol.load_config(str(self.tmp / "spaces.json"))
+        self.assertIn("not finite", str(raised.exception))
+
+    def test_the_full_png_signature_is_required(self) -> None:
+        shutil.copytree(EXAMPLES / "logos", self.tmp / "logos")
+        sig = b"\x89PNG\r\n\x1a\n"
+        (self.tmp / "logos/ok.png").write_bytes(sig + b"rest")
+        (self.tmp / "logos/short.png").write_bytes(b"\x89PNG" + b"rest")
+        (self.tmp / "logos/bad.png").write_bytes(b"\x00PNG\r\n\x1a\n" + b"rest")
+        for logo, ok in (("ok.png", True), ("short.png", False), ("bad.png", False)):
+            (self.tmp / "spaces.json").write_text(json.dumps({"spaces": {"a": {"logo": logo}}}))
+            with self.subTest(logo=logo):
+                if ok:
+                    self.assertIn("a", ol.load_config(str(self.tmp / "spaces.json")).spaces)
+                else:
+                    with self.assertRaises(SystemExit):
+                        ol.load_config(str(self.tmp / "spaces.json"))
 
 
 @unittest.skipUnless(NODE, "node is not installed")

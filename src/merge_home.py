@@ -18,6 +18,7 @@ functions; the file writes and the undo live there.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 PICKER = "mod.open:picker"
@@ -137,6 +138,24 @@ def write(path: Path, before: dict, after: dict) -> bool:
 # ---- what a change was, and how to take back only that ---------------------------------
 # The install records each value it set or rebound (before and after). Undo puts a value
 # back only while it still reads as the install left it, and never replaces a whole file.
+
+
+def _not_finite(text: str) -> float:
+    raise ValueError(f"the number {text} is not finite")
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        _not_finite(text)
+    return value
+
+
+def strict_loads(text: str) -> object:
+    """json.loads that refuses Infinity, NaN and a number like 1e400 that would become one.
+
+    Raises ValueError (json.JSONDecodeError is one too)."""
+    return json.loads(text, parse_constant=_not_finite, parse_float=_finite_float)
 
 
 class BadFile(ValueError):

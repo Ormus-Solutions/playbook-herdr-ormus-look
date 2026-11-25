@@ -1,58 +1,91 @@
 #!/usr/bin/env python3
-"""decoded_scrub.py: the scrub on the text as a program reads it, not as it is typed.
+"""decoded_scrub.py: the deny-list scrub on the text as a program reads it.
 
-scripts/scrub.sh reads the characters in a file. A word written with an escape
-(a backslash-u code, a hex escape, an HTML entity) is not those characters in the
-file, but it is the same word once a program reads it. This check closes that gap:
+scripts/scrub.sh reads the characters in a file. A word written with an escape is
+not those characters in the file, but it is the same word once a program decodes
+it. This check decodes every escape form it knows, again and again until the text
+stops changing, and runs your deny-list on the result.
 
-  - it decodes the backslash-u escapes in every text file and runs your deny-list
-    on the decoded text; the one word the repo spells with an escape on purpose
-    (SHIELD below) is skipped only for a deny-list entry that is exactly that word;
-  - it refuses the other ways to spell letters without typing them: hex escapes
-    (backslash-x), octal, named and doubled escapes, CSS escapes, the char-code and
-    decoding functions of JavaScript and Python, numeric HTML entities, runs of
-    percent codes, and letters outside ASCII in code files (lookalikes).
+Decoded: backslash-u (4 hex, braced, and the 8-hex capital form), \\N{NAME},
+backslash-x, octal (3 digits), CSS escapes (1 to 6 hex digits), numeric HTML
+entities with or without the semicolon, named HTML entities, and percent codes.
+
+Not covered (do not rely on it for these): a word split by string concatenation or
+a join, lookalike letters (Cyrillic or fullwidth), zero-width characters, and
+encodings such as base64 or rot13. The deny-list match on the plain text is
+scripts/scrub.sh's job; this script reports a word only when it shows up after
+decoding and not before.
+
+The one word the repo spells with an escape on purpose (SHIELD) is skipped only for a
+deny-list entry that is exactly that word; an entry that has it inside several
+words is matched on the fully decoded text.
 
 Usage: python3 scripts/decoded_scrub.py [dir]
 The deny-list path is $PLAYBOOK_DENYLIST, default ~/.config/playbooks/denylist.txt;
-without one the decoding checks still run. Findings print file, line and rule, never
-the word. Exit 0 clean, 1 findings.
+without one nothing is matched. Findings print file, line and rule, never the
+word. A code point that does not exist is a finding. Exit 0 clean, 1 findings.
 """
 from __future__ import annotations
 
+import html
 import os
 import re
 import sys
 import unicodedata
+import urllib.parse
 from pathlib import Path
 
 SHIELD = "hov" + "\\" + "u0065r"  # the one escaped word that is allowed, as typed in the files
 SHIELD_WORD = "hov" + "er"  # what it decodes to
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
-CODE_SUFFIXES = {".js", ".mjs", ".py", ".sh", ".css", ".html", ".ts"}
-BS = re.escape(chr(92))  # a backslash, as a regex piece, so this file never types an escape itself
-RULES = {
-    "hex-escape": re.compile(BS + r"x[0-9a-fA-F]{2}"),
-    "wide-escape": re.compile(BS + r"U[0-9a-fA-F]{8}"),
-    "named-escape": re.compile(BS + r"N\{"),
-    "octal-escape": re.compile(BS + r"[0-7]{3}"),
-    "double-escape": re.compile(BS + BS + r"(?:u[0-9a-fA-F]{4}|u" + re.escape("{") + r"|x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8}|N" + re.escape("{") + ")"),
-    "char-code-function": re.compile(
-        r"fromChar" + r"Code|fromCode" + r"Point|\bchr\(|\batob\(|\bunescape\(|decodeURI" + r"Component\(|from" + r"hex\(|rot" + "13",
-        re.I,
-    ),
-    "html-entity": re.compile(r"&#[xX]?[0-9a-fA-F]+"),
-    "percent-run": re.compile(r"(?:%[0-9a-fA-F]{2}){2,}"),
-}
-CSS_ESCAPE = re.compile(BS + r"[0-9a-fA-F]{1,6}")  # a CSS escape, checked in CSS files only
-UNICODE = re.compile(BS + r"u\{([0-9a-fA-F]{1,8})\}|" + BS + r"u([0-9a-fA-F]{4})|" + BS + r"U([0-9a-fA-F]{8})")
+BS = re.escape("\\")  # a backslash, as a regex piece
+MAX_PASSES = 10
+
+# One pattern per escape form; each is replaced by the character it stands for.
+ESCAPES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(BS + r"u\{([0-9a-fA-F]{1,8})\}"), "hex"),
+    (re.compile(BS + r"u([0-9a-fA-F]{4})"), "hex"),
+    (re.compile(BS + r"U([0-9a-fA-F]{8})"), "hex"),
+    (re.compile(BS + r"x([0-9a-fA-F]{2})"), "hex"),
+    (re.compile(BS + r"N\{([^}]+)\}"), "name"),
+    (re.compile(BS + r"([0-7]{3})"), "octal"),
+    (re.compile(BS + r"([0-9a-fA-F]{1,6})[ \t]?"), "hex"),  # CSS
+]
+
+
+class BadCodePoint(ValueError):
+    pass
+
+
+def replace(match: re.Match[str], kind: str) -> str:
+    text = match.group(1)
+    try:
+        if kind == "name":
+            return unicodedata.lookup(text)
+        return chr(int(text, 8 if kind == "octal" else 16))
+    except KeyError:
+        return match.group(0)  # not a name Python knows: leave it
+    except (ValueError, OverflowError) as e:
+        raise BadCodePoint(match.group(0)) from e
+
+
+def decode_once(line: str) -> str:
+    for rx, kind in ESCAPES:
+        line = rx.sub(lambda m, k=kind: replace(m, k), line)
+    line = html.unescape(line)
+    return urllib.parse.unquote(line)
 
 
 def decode(line: str, blank_shield: bool = False) -> str:
-    """The line as a program reads it. Raises ValueError on a code point that does not exist."""
+    """The line with every known escape decoded until it stops changing."""
     if blank_shield:
         line = line.replace(SHIELD, "\x00")
-    return UNICODE.sub(lambda m: chr(int(m.group(1) or m.group(2) or m.group(3), 16)), line)
+    for _ in range(MAX_PASSES):
+        step = decode_once(line)
+        if step == line:
+            break
+        line = step
+    return line
 
 
 def load_denylist() -> list[tuple[re.Pattern[str], bool]]:
@@ -64,9 +97,9 @@ def load_denylist() -> list[tuple[re.Pattern[str], bool]]:
         entry = raw.strip()
         if not entry or entry.startswith("#"):
             continue
-        words = [re.escape(w) for w in re.split(r"[\s._-]+", entry) if w]
-        body = r"[\s._-]?".join(words)
-        only_shield = [w.lower() for w in re.split(r"[\s._-]+", entry) if w] == [SHIELD_WORD]
+        words = [w for w in re.split(r"[\s._-]+", entry) if w]
+        body = r"[\s._-]?".join(re.escape(w) for w in words)
+        only_shield = [w.lower() for w in words] == [SHIELD_WORD]
         patterns.append((re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.I), only_shield))
     return patterns
 
@@ -85,32 +118,18 @@ def main() -> int:
         except (UnicodeDecodeError, OSError):
             continue
         checked += 1
-        code = file.suffix in CODE_SUFFIXES or file.suffix == ".json"
         for n, line in enumerate(text.splitlines(), 1):
             where = f"{file.relative_to(root)}:{n}"
-            for rule, rx in RULES.items():
-                if rx.search(line):
-                    print(f"{where}: {rule}")
-                    found += 1
-            if file.suffix == ".css" and CSS_ESCAPE.search(line):
-                print(f"{where}: css-escape")
-                found += 1
-            if code and any(unicodedata.category(c).startswith("L") and ord(c) > 127 for c in line):
-                print(f"{where}: non-ascii-letter (a lookalike letter can spell a word)")
-                found += 1
             try:
                 full, blank = decode(line), decode(line, blank_shield=True)
-            except (ValueError, OverflowError):
+            except BadCodePoint:
                 print(f"{where}: invalid-escape")
                 found += 1
-                continue
-            if full == line and "\\" not in line:
                 continue
             for i, (rx, only_shield) in enumerate(deny, 1):
                 # An entry that is exactly the shielded word skips the shielded spelling; every
                 # other entry, also one that has that word inside it, reads the fully decoded text.
-                seen = rx.search(blank if only_shield else full)
-                if seen and not rx.search(line):
+                if rx.search(blank if only_shield else full) and not rx.search(line):
                     print(f"{where}: deny-list entry {i} (after decoding escapes)")
                     found += 1
     status = "FAILED" if found else "clean"
