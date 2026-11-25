@@ -1,0 +1,5 @@
+{
+  "programs": {
+    "claude": { "icon": "mods/ormus-chrome/ormus-mark.svg", "tint": true }
+  }
+}

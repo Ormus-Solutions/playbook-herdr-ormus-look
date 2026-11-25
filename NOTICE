@@ -1,0 +1,44 @@
+playbook-herdr-ormus-look
+Copyright (c) 2026 Ormus (Ormus Solutions). MIT license (LICENSE).
+
+This repo contains work derived from the Herdr desktop app (herdr-app 0.1.15,
+https://herdr.dev), which is licensed under the Apache License, Version 2.0.
+The full text is in LICENSE-APACHE-2.0.txt. The derived parts keep that
+license; the Apache License also applies to the changes made to them here.
+
+What is derived, and Changes made to it
+---------------------------------------
+
+1. layouts/ormus.json is Herdr's `main` layout, cloned (its mod.json marker
+   says cloned_from main 0.1.15). Changes: the theme, fonts, 14 px pane
+   corners, the sidebar blocks (the Ormus header, Needs you / Overview, the
+   Flock sidebar), and the pane header mod.
+2. mods/ormus-chrome/main.js is Herdr's `workspace-chrome` mod, cloned.
+   Changes: the Ormus mark and wordmark in the sidebar header, the search
+   button opens the Ormus picker, the Settings and Add machine rows.
+3. mods/ormus-spaces, mods/ormus-picker and mods/ormus-pane are NOT in this
+   repo. The install builds them in your Herdr home from your own copies of
+   Herdr's `spaces`, `picker` and `pane` mods, with anchored edits
+   (src/space_tiles.py and src/pane_head.py). The anchors are the few lines of
+   Herdr's code, copied from 0.1.15, that the edits look for. Changes: a logo
+   or accent tile per space, a name per pane, a Spotlight button, an Overview
+   window.
+4. themes/*.json follow the theme format of Herdr and carry its color names;
+   the colors are the Ormus palette.
+5. The icons in mods/ormus-chrome/*.svg (except ormus-mark.svg) are Lucide
+   icons (https://lucide.dev, ISC license, Copyright (c) Lucide Contributors
+   and, for the Feather parts, Copyright (c) 2013-2022 Cole Bemis), the set
+   Herdr's own mod folders use. The Ormus mark is the Ormus brand's.
+
+Everything else (mods/ormus-needs, mods/ormus-search, mods/ormus-cards, the
+install tool) is written for this repo and uses only the mod API of Herdr.
+Its Needs you view and Overview borrow ideas from Flockbook
+(https://github.com/minchenlee/flockbook, MIT license); the code is new.
+
+Fonts: Inter and Cormorant Garamond are under the SIL Open Font License 1.1.
+Their notices are next to the font files (mods/ormus-chrome/fonts/*-OFL.txt)
+and must stay with them. JetBrains Mono, which the layout names, is not
+included.
+
+Herdr is a trademark of its owners; this repo is not made by or endorsed by
+them.

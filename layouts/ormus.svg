@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200">
+  <!-- Ormus: midnight lacquer sidebar, deep canvas, code-dark pane cards with soft 14px corners -->
+  <rect width="320" height="200" fill="#0e1830"/>
+  <!-- sidebar -->
+  <rect width="86" height="200" fill="#14213d"/>
+  <rect x="86" width="1" height="200" fill="#eceae3" fill-opacity="0.12"/>
+  <!-- mark and wordmark -->
+  <path d="M12 9 q4 4 0 8 q-3 3 1 6" fill="none" stroke="#eceae3" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="20" y="20" font-family="Cormorant Garamond, Georgia, serif" font-size="11" fill="#eceae3">Ormus</text>
+  <!-- spaces: identity tiles and names -->
+  <g font-family="Inter, sans-serif" font-size="6" fill="#a5b0c4">
+    <rect x="10" y="36" width="7" height="7" rx="2" fill="#22a99a"/><rect x="21" y="38" width="40" height="3" rx="1.5" fill="#eceae3" fill-opacity="0.75"/>
+    <rect x="6" y="47" width="74" height="13" rx="4" fill="#eceae3" fill-opacity="0.10"/>
+    <rect x="10" y="50" width="7" height="7" rx="2" fill="#e3814f"/><rect x="21" y="52" width="46" height="3" rx="1.5" fill="#eceae3"/>
+    <rect x="10" y="64" width="7" height="7" rx="2" fill="#5b8def"/><rect x="21" y="66" width="34" height="3" rx="1.5" fill="#eceae3" fill-opacity="0.75"/>
+    <rect x="10" y="78" width="7" height="7" rx="2" fill="#8b7cf6"/><rect x="21" y="80" width="42" height="3" rx="1.5" fill="#eceae3" fill-opacity="0.75"/>
+  </g>
+  <!-- agents: one done (gold, the thing to integrate), one needs you, idle rows -->
+  <rect x="10" y="104" width="24" height="2" rx="1" fill="#6d7891"/>
+  <rect x="10" y="114" width="44" height="3" rx="1.5" fill="#eceae3" fill-opacity="0.75"/><circle cx="74" cy="115.5" r="2.5" fill="#e0b258"/>
+  <rect x="10" y="126" width="38" height="3" rx="1.5" fill="#eceae3" fill-opacity="0.75"/><rect x="62" y="124" width="16" height="7" rx="3.5" fill="#e27a72" fill-opacity="0.2"/>
+  <rect x="10" y="138" width="40" height="3" rx="1.5" fill="#6d7891"/><circle cx="74" cy="139.5" r="2" fill="none" stroke="#6d7891" stroke-width="1"/>
+  <rect x="10" y="150" width="34" height="3" rx="1.5" fill="#6d7891"/><circle cx="74" cy="151.5" r="2" fill="none" stroke="#6d7891" stroke-width="1"/>
+  <!-- tab pills -->
+  <rect x="94" y="6" width="44" height="12" rx="6" fill="#eceae3" fill-opacity="0.10"/>
+  <rect x="100" y="10.5" width="30" height="3" rx="1.5" fill="#eceae3"/>
+  <rect x="146" y="10.5" width="28" height="3" rx="1.5" fill="#6d7891"/>
+  <!-- pane cards: the focused one has the ink border -->
+  <rect x="93" y="25" width="132" height="162" rx="7" fill="#0b1226" stroke="#eceae3" stroke-width="0.8"/>
+  <rect x="230" y="25" width="84" height="162" rx="7" fill="#0b1226" stroke="#eceae3" stroke-opacity="0.12" stroke-width="0.8"/>
+  <g fill="#a5b0c4">
+    <rect x="101" y="40" width="70" height="3" rx="1.5" fill="#eceae3"/>
+    <rect x="101" y="49" width="96" height="3" rx="1.5"/>
+    <rect x="101" y="58" width="60" height="3" rx="1.5" fill="#d29e3d"/>
+    <rect x="101" y="67" width="84" height="3" rx="1.5"/>
+    <rect x="101" y="76" width="44" height="3" rx="1.5" fill="#6f93cf"/>
+    <rect x="101" y="85" width="4" height="6" fill="#d29e3d"/>
+    <rect x="238" y="40" width="54" height="3" rx="1.5"/>
+    <rect x="238" y="49" width="40" height="3" rx="1.5" fill="#8fb08a"/>
+    <rect x="238" y="58" width="62" height="3" rx="1.5"/>
+  </g>
+  <!-- status bar -->
+  <rect x="93" y="192" width="40" height="3" rx="1.5" fill="#6d7891"/>
+</svg>
