@@ -718,6 +718,51 @@ class DecodedScrubTest(unittest.TestCase):
         self.assertIn("invalid-escape", done.stdout)
         self.assertNotIn("Traceback", done.stderr)
 
+    def test_paths_regexes_and_css_that_look_like_escapes_pass(self) -> None:
+        bs = self.BS
+        cases = [
+            ("D:" + bs + "archive" + bs + "decade", "x.md"),
+            ('r"' + bs + "bdecade" + bs + 'b"', "x.py"),
+            ("C:" + bs + "facade", "x.md"),
+            ('{"p": "C:' + bs + bs + 'abcdef"}', "x.json"),
+            (".a{background:" + bs + "ff0000}", "x.css"),
+            ("echo " + bs + "fffffff7", "x.sh"),
+        ]
+        for text, name in cases:
+            with self.subTest(text=text):
+                done = self.run_scrub(text + "\n", name=name)
+                self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_explicit_forms_past_the_last_code_point_are_findings(self) -> None:
+        bs = self.BS
+        for text in (bs + "u{110000}", bs + "U00110000", "&" + "#x110000;", "&" + "#99999999999;", "&" + "#" + "9" * 5000):
+            with self.subTest(text=text[:20]):
+                done = self.run_scrub("x = '" + text + "'\n")
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn("invalid-escape", done.stdout)
+
+    def test_a_css_escape_for_a_control_character_makes_no_false_hit(self) -> None:
+        done = self.run_scrub("quux" + self.BS + "dplant\n", deny="quux plant\n")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_many_named_escape_openers_finish_fast(self) -> None:
+        import time
+
+        start = time.monotonic()
+        done = self.run_scrub((self.BS + "N{") * 200000 + "\n")
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(done.returncode, 0)
+
+    def test_nesting_is_decoded_to_fifty_levels_and_deeper_is_a_finding(self) -> None:
+        def nested(depth: int) -> str:
+            return "%" + "25" * depth + "7aorpfoo"
+
+        self.assertEqual(self.run_scrub(nested(30) + "\n").returncode, 1)
+        deep = self.run_scrub(nested(80) + "\n")
+        self.assertEqual(deep.returncode, 1)
+        self.assertIn("nesting deeper than 50", deep.stdout)
+        self.assertIn("50 times", (ROOT / "README.md").read_text())
+
     def test_what_it_does_not_cover_is_said_in_the_readme(self) -> None:
         text = (ROOT / "README.md").read_text()
         for word in ("string concatenation", "lookalike letters", "zero-width", "base64"):
